@@ -171,15 +171,20 @@ struct SettingsView: View {
         
         Task {
             do {
+                print("[SettingsView] Starting authentication for \(provider)...")
                 _ = try await oauthService.authenticate(provider: provider)
+                print("[SettingsView] Authentication successful, refreshing connection state...")
                 await MainActor.run {
                     refreshConnectionState()
+                    print("[SettingsView] googleConnected: \(self.googleConnected), microsoftConnected: \(self.microsoftConnected)")
                 }
             } catch {
+                print("[SettingsView] Authentication failed with error: \(error)")
                 await MainActor.run {
                     // Don't show error for user-cancelled sessions (code 1 = canceledLogin)
                     let nsError = error as NSError
                     if nsError.domain == "com.apple.AuthenticationServices.WebAuthenticationSession" && nsError.code == 1 {
+                        print("[SettingsView] User cancelled the session.")
                         // User cancelled — no error to show
                     } else {
                         self.errorMessage = error.localizedDescription

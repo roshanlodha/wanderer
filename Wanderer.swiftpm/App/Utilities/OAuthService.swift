@@ -105,15 +105,22 @@ class OAuthService: NSObject, ASWebAuthenticationPresentationContextProviding {
         let codeChallenge = generateCodeChallenge(from: codeVerifier)
         
         let authURL = buildAuthURL(provider: provider, codeChallenge: codeChallenge)
+        print("[OAuthService] Starting ASWebAuthenticationSession with URL: \(authURL)")
+        
         let authCode = try await startAuthSession(url: authURL, scheme: provider.callbackScheme)
+        print("[OAuthService] Received auth code: \(authCode)")
+        
+        print("[OAuthService] Exchanging code for token...")
         let tokenResponse = try await exchangeCodeForToken(
             provider: provider,
             code: authCode,
             codeVerifier: codeVerifier
         )
+        print("[OAuthService] Token exchange successful.")
         
         // Persist tokens
         saveTokens(provider: provider, response: tokenResponse)
+        print("[OAuthService] Tokens saved to keychain.")
         
         return tokenResponse
     }
