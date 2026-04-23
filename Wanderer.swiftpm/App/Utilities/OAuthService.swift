@@ -8,19 +8,31 @@ import UIKit
 import AppKit
 #endif
 
-// MARK: - ⚠️ Configuration — Fill in your real credentials here
+// MARK: - Configuration (loaded from Secrets.plist)
 
 enum OAuthConfig {
+    
+    /// Load secrets from Secrets.plist bundled in the app.
+    private static let secrets: [String: String] = {
+        guard let url = Bundle.main.url(forResource: "Secrets", withExtension: "plist"),
+              let data = try? Data(contentsOf: url),
+              let dict = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: String] else {
+            print("[OAuthConfig] ⚠️ Secrets.plist not found or unreadable. OAuth will not work.")
+            return [:]
+        }
+        return dict
+    }()
+    
     enum Google {
-        /// Create at: https://console.cloud.google.com/apis/credentials
-        /// Type: iOS app (or "Desktop app" for Mac Catalyst)
-        static let clientID = "251569997541-p9broteupleia5q0rjlpp88qu3t53hca.apps.googleusercontent.com"
-        static let clientSecret = "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"
+        static var clientID: String { OAuthConfig.secrets["GoogleClientID"] ?? "" }
+        static var clientSecret: String { OAuthConfig.secrets["GoogleClientSecret"] ?? "" }
         
-        /// Google requires the reversed client ID as the redirect URI scheme for native apps.
-        /// Format: com.googleusercontent.apps.<CLIENT_ID_PREFIX>:/oauthredirect
-        static let reversedClientID = "com.googleusercontent.apps.251569997541-p9broteupleia5q0rjlpp88qu3t53hca"
-        static let redirectURI = "com.googleusercontent.apps.251569997541-p9broteupleia5q0rjlpp88qu3t53hca:/oauthredirect"
+        static var reversedClientID: String {
+            // Reversed client ID for redirect: com.googleusercontent.apps.<prefix>
+            let prefix = clientID.replacingOccurrences(of: ".apps.googleusercontent.com", with: "")
+            return "com.googleusercontent.apps.\(prefix)"
+        }
+        static var redirectURI: String { "\(reversedClientID):/oauthredirect" }
         
         static let authEndpoint = "https://accounts.google.com/o/oauth2/v2/auth"
         static let tokenEndpoint = "https://oauth2.googleapis.com/token"
@@ -28,9 +40,7 @@ enum OAuthConfig {
     }
     
     enum Microsoft {
-        /// Create at: https://portal.azure.com/#blade/Microsoft_AAD_RegisteredApps
-        /// Type: Mobile and desktop applications
-        static let clientID = "YOUR_MICROSOFT_CLIENT_ID"
+        static var clientID: String { OAuthConfig.secrets["MicrosoftClientID"] ?? "" }
         
         static let redirectURI = "wanderer://oauth2/microsoft"
         static let authEndpoint = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize"
@@ -59,7 +69,7 @@ struct OAuthTokenResponse: Codable {
 
 class OAuthService: NSObject, ASWebAuthenticationPresentationContextProviding {
     
-    enum Provider {
+    enum Provider: CustomStringConvertible {
         case google
         case microsoft
         
@@ -71,6 +81,13 @@ class OAuthService: NSObject, ASWebAuthenticationPresentationContextProviding {
                 return "wanderer"
             }
         }
+        
+        var description: String {
+            switch self {
+            case .google: return "Google"
+            case .microsoft: return "Microsoft"
+            }
+        }
     }
     
     private var authSession: ASWebAuthenticationSession?
@@ -78,7 +95,6 @@ class OAuthService: NSObject, ASWebAuthenticationPresentationContextProviding {
     // MARK: - PKCE Helpers
     
     private func generateCodeVerifier() -> String {
-        // 32 random bytes → 43-character base64url string
         var buffer = [UInt8](repeating: 0, count: 32)
         _ = SecRandomCopyBytes(kSecRandomDefault, buffer.count, &buffer)
         return Data(buffer)
@@ -100,27 +116,40 @@ class OAuthService: NSObject, ASWebAuthenticationPresentationContextProviding {
     
     // MARK: - Public API
     
+    /// Returns true if the given provider has a stored access token.
+    func isConnected(provider: Provider) -> Bool {
+        let keychain = KeychainManager.shared
+        switch provider {
+        case .google: return keychain.hasToken(forKey: .googleAccessToken)
+        case .microsoft: return keychain.hasToken(forKey: .microsoftAccessToken)
+        }
+    }
+    
     func authenticate(provider: Provider) async throws -> OAuthTokenResponse {
         let codeVerifier = generateCodeVerifier()
         let codeChallenge = generateCodeChallenge(from: codeVerifier)
         
         let authURL = buildAuthURL(provider: provider, codeChallenge: codeChallenge)
-        print("[OAuthService] Starting ASWebAuthenticationSession with URL: \(authURL)")
+        print("[OAuthService] Starting auth session for \(provider)...")
         
         let authCode = try await startAuthSession(url: authURL, scheme: provider.callbackScheme)
-        print("[OAuthService] Received auth code: \(authCode)")
+        print("[OAuthService] Got auth code, exchanging for token...")
         
-        print("[OAuthService] Exchanging code for token...")
         let tokenResponse = try await exchangeCodeForToken(
             provider: provider,
             code: authCode,
             codeVerifier: codeVerifier
         )
-        print("[OAuthService] Token exchange successful.")
+        print("[OAuthService] Token exchange successful (access_token length: \(tokenResponse.accessToken.count), refresh_token: \(tokenResponse.refreshToken != nil ? "present" : "nil"))")
         
-        // Persist tokens
-        saveTokens(provider: provider, response: tokenResponse)
-        print("[OAuthService] Tokens saved to keychain.")
+        // Persist tokens and verify
+        let saved = saveTokens(provider: provider, response: tokenResponse)
+        if saved {
+            print("[OAuthService] ✅ Tokens saved and verified for \(provider).")
+        } else {
+            print("[OAuthService] ❌ Token save FAILED for \(provider)!")
+            throw OAuthError.tokenSaveFailed
+        }
         
         return tokenResponse
     }
@@ -230,7 +259,7 @@ class OAuthService: NSObject, ASWebAuthenticationPresentationContextProviding {
         
         guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
             let responseBody = String(data: data, encoding: .utf8) ?? "No body"
-            print("Token exchange failed: \(responseBody)")
+            print("[OAuthService] Token exchange failed: \(responseBody)")
             throw OAuthError.tokenExchangeFailed
         }
         
@@ -239,7 +268,8 @@ class OAuthService: NSObject, ASWebAuthenticationPresentationContextProviding {
     
     // MARK: - Token Persistence
     
-    private func saveTokens(provider: Provider, response: OAuthTokenResponse) {
+    /// Saves tokens and returns true only if the save can be verified by reading back.
+    private func saveTokens(provider: Provider, response: OAuthTokenResponse) -> Bool {
         let keychain = KeychainManager.shared
         
         switch provider {
@@ -248,11 +278,19 @@ class OAuthService: NSObject, ASWebAuthenticationPresentationContextProviding {
             if let refresh = response.refreshToken {
                 keychain.save(refresh, forKey: .googleRefreshToken)
             }
+            // Verify the save actually worked
+            let verified = keychain.hasToken(forKey: .googleAccessToken)
+            print("[OAuthService] Google token save verified: \(verified)")
+            return verified
+            
         case .microsoft:
             keychain.save(response.accessToken, forKey: .microsoftAccessToken)
             if let refresh = response.refreshToken {
                 keychain.save(refresh, forKey: .microsoftRefreshToken)
             }
+            let verified = keychain.hasToken(forKey: .microsoftAccessToken)
+            print("[OAuthService] Microsoft token save verified: \(verified)")
+            return verified
         }
     }
     
@@ -292,6 +330,7 @@ enum OAuthError: LocalizedError {
     case missingAuthCode
     case sessionStartFailed
     case tokenExchangeFailed
+    case tokenSaveFailed
     
     var errorDescription: String? {
         switch self {
@@ -301,6 +340,8 @@ enum OAuthError: LocalizedError {
             return "Failed to start the authentication session."
         case .tokenExchangeFailed:
             return "Failed to exchange the authorization code for an access token."
+        case .tokenSaveFailed:
+            return "Token was received but could not be saved to local storage."
         }
     }
 }
