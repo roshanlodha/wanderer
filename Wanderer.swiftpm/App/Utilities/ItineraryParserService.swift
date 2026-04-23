@@ -55,23 +55,19 @@ class ItineraryParserService {
     func parse(emailText: String) async throws -> [ItineraryItem] {
         let engine = UserDefaults.standard.string(forKey: "extractionEngine") ?? "Cloud (OpenAI)"
         
-        #if true
         var extractedItems: [ExtractedItineraryItem] = []
         
         if engine == "Cloud (OpenAI)" {
             extractedItems = try await parseWithOpenAI(text: emailText)
         } else if engine == "Apple Intelligence" {
             extractedItems = try await parseWithAppleIntelligence(text: emailText)
-        }
-        #elseif canImport(MLX)
-        else {
+        } else {
+            #if canImport(MLX)
             extractedItems = try await parseWithLocalMLX(text: emailText)
-        }
-        #else
-        else {
+            #else
             throw ParserError.missingEngine
+            #endif
         }
-        #endif
         
         // Map to SwiftData objects (without context or trip initially)
         return extractedItems.map { item in
