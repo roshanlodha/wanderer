@@ -5,8 +5,9 @@ import SwiftData
 import FoundationModels
 #endif
 
-// To fully run MLX LLMs, one would also import MLXLLM from mlx-swift-examples
+#if canImport(MLX)
 import MLX
+#endif
 
 struct ExtractedItineraryItem: Codable {
     let title: String
@@ -54,15 +55,23 @@ class ItineraryParserService {
     func parse(emailText: String) async throws -> [ItineraryItem] {
         let engine = UserDefaults.standard.string(forKey: "extractionEngine") ?? "Cloud (OpenAI)"
         
+        #if true
         var extractedItems: [ExtractedItineraryItem] = []
         
         if engine == "Cloud (OpenAI)" {
             extractedItems = try await parseWithOpenAI(text: emailText)
         } else if engine == "Apple Intelligence" {
             extractedItems = try await parseWithAppleIntelligence(text: emailText)
-        } else {
+        }
+        #elseif canImport(MLX)
+        else {
             extractedItems = try await parseWithLocalMLX(text: emailText)
         }
+        #else
+        else {
+            throw ParserError.missingEngine
+        }
+        #endif
         
         // Map to SwiftData objects (without context or trip initially)
         return extractedItems.map { item in
@@ -243,6 +252,7 @@ class ItineraryParserService {
         #endif
     }
     
+    #if canImport(MLX)
     private func parseWithLocalMLX(text: String) async throws -> [ExtractedItineraryItem] {
         // Finalized MLX Swift Port Structure
         // In a full production application, you would load a model like "mlx-community/Llama-3-8B-Instruct-4bit"
@@ -291,4 +301,9 @@ class ItineraryParserService {
         
         return [dummyItem]
     }
+    #else
+    private func parseWithLocalMLX(text: String) async throws -> [ExtractedItineraryItem] {
+        throw ParserError.missingEngine
+    }
+    #endif
 }
