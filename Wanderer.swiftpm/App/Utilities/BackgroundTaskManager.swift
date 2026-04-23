@@ -36,8 +36,12 @@ class BackgroundTaskManager {
         // Schedule the next fetch immediately
         scheduleEmailFetch()
         
+        // Background fetch uses a broad date range (last 30 days to 30 days out)
+        let startDate = Date().addingTimeInterval(-30 * 86400)
+        let endDate = Date().addingTimeInterval(30 * 86400)
+        
         let fetchTask = Task {
-            let emails = await EmailFetchService.shared.fetchAllTravelEmails()
+            let emails = await EmailFetchService.shared.fetchTravelEmails(from: startDate, to: endDate)
             print("[BackgroundTaskManager] Background fetch completed: \(emails.count) emails.")
             task.setTaskCompleted(success: true)
         }

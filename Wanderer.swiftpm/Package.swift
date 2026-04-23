@@ -44,7 +44,10 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "AppModule",
-            path: "App"
+            path: "App",
+            resources: [
+                .process("Secrets.plist")
+            ]
         )
     ]
 )

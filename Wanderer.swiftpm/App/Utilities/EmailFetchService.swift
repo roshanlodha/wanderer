@@ -19,15 +19,19 @@ class EmailFetchService {
     
     private let keychain = KeychainManager.shared
     
-    // MARK: - Public API
+    // MARK: - Public API (Trip-Scoped)
     
-    /// Fetch travel emails from all connected providers and cache the raw text.
-    func fetchAllTravelEmails() async -> [FetchedEmail] {
+    /// Fetch travel emails for a specific trip's date range from all connected providers.
+    func fetchTravelEmails(from startDate: Date, to endDate: Date) async -> [FetchedEmail] {
         var allEmails: [FetchedEmail] = []
         
         if let googleToken = keychain.get(forKey: .googleAccessToken) {
             do {
-                let emails = try await fetchGmailTravelEmails(accessToken: googleToken)
+                let emails = try await fetchGmailTravelEmails(
+                    accessToken: googleToken,
+                    after: startDate,
+                    before: endDate
+                )
                 allEmails.append(contentsOf: emails)
                 print("[EmailFetchService] Fetched \(emails.count) travel emails from Gmail.")
             } catch {
@@ -37,7 +41,11 @@ class EmailFetchService {
         
         if let msToken = keychain.get(forKey: .microsoftAccessToken) {
             do {
-                let emails = try await fetchMicrosoftTravelEmails(accessToken: msToken)
+                let emails = try await fetchMicrosoftTravelEmails(
+                    accessToken: msToken,
+                    after: startDate,
+                    before: endDate
+                )
                 allEmails.append(contentsOf: emails)
                 print("[EmailFetchService] Fetched \(emails.count) travel emails from Microsoft.")
             } catch {
@@ -45,9 +53,8 @@ class EmailFetchService {
             }
         }
         
-        // Save all raw text to temp cache
-        for email in allEmails {
-            saveToTemporaryCache(email: email)
+        if allEmails.isEmpty {
+            print("[EmailFetchService] No connected accounts or no emails found.")
         }
         
         return allEmails
@@ -55,13 +62,21 @@ class EmailFetchService {
     
     // MARK: - Gmail REST API
     
-    private func fetchGmailTravelEmails(accessToken: String) async throws -> [FetchedEmail] {
-        // Step 1: Search for messages matching travel keywords
-        let query = travelKeywords.joined(separator: " OR ")
+    private func fetchGmailTravelEmails(accessToken: String, after: Date, before: Date) async throws -> [FetchedEmail] {
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "yyyy/MM/dd"
+        
+        let afterStr = dateFormatter.string(from: after)
+        let beforeStr = dateFormatter.string(from: before)
+        
+        // Gmail query: travel keywords + date range
+        let keywordQuery = travelKeywords.joined(separator: " OR ")
+        let query = "(\(keywordQuery)) after:\(afterStr) before:\(beforeStr)"
+        
         var searchComponents = URLComponents(string: "https://gmail.googleapis.com/gmail/v1/users/me/messages")!
         searchComponents.queryItems = [
             URLQueryItem(name: "q", value: query),
-            URLQueryItem(name: "maxResults", value: "10")
+            URLQueryItem(name: "maxResults", value: "20")
         ]
         
         let searchRequest = makeAuthorizedRequest(url: searchComponents.url!, token: accessToken)
@@ -74,9 +89,9 @@ class EmailFetchService {
             return []
         }
         
-        // Step 2: Fetch full message for each result
+        // Fetch full message for each result
         var emails: [FetchedEmail] = []
-        for ref in messageRefs.prefix(10) {
+        for ref in messageRefs.prefix(20) {
             let messageURL = URL(string: "https://gmail.googleapis.com/gmail/v1/users/me/messages/\(ref.id)?format=full")!
             let msgRequest = makeAuthorizedRequest(url: messageURL, token: accessToken)
             let (msgData, msgResponse) = try await URLSession.shared.data(for: msgRequest)
@@ -94,12 +109,20 @@ class EmailFetchService {
     
     // MARK: - Microsoft Graph REST API
     
-    private func fetchMicrosoftTravelEmails(accessToken: String) async throws -> [FetchedEmail] {
-        let query = travelKeywords.joined(separator: " OR ")
+    private func fetchMicrosoftTravelEmails(accessToken: String, after: Date, before: Date) async throws -> [FetchedEmail] {
+        let isoFormatter = ISO8601DateFormatter()
+        isoFormatter.formatOptions = [.withInternetDateTime]
+        
+        let afterStr = isoFormatter.string(from: after)
+        let beforeStr = isoFormatter.string(from: before)
+        
+        let keywordQuery = travelKeywords.joined(separator: " OR ")
+        
         var searchComponents = URLComponents(string: "https://graph.microsoft.com/v1.0/me/messages")!
         searchComponents.queryItems = [
-            URLQueryItem(name: "$search", value: "\"\(query)\""),
-            URLQueryItem(name: "$top", value: "10"),
+            URLQueryItem(name: "$search", value: "\"\(keywordQuery)\""),
+            URLQueryItem(name: "$filter", value: "receivedDateTime ge \(afterStr) and receivedDateTime le \(beforeStr)"),
+            URLQueryItem(name: "$top", value: "20"),
             URLQueryItem(name: "$select", value: "id,subject,from,receivedDateTime,body")
         ]
         
@@ -157,27 +180,6 @@ class EmailFetchService {
         return components.filter { !$0.isEmpty }.joined(separator: " ")
     }
     
-    private func saveToTemporaryCache(email: FetchedEmail) {
-        let tempDir = FileManager.default.temporaryDirectory
-        let sanitizedID = email.id.replacingOccurrences(of: "/", with: "_")
-        let fileURL = tempDir.appendingPathComponent("wanderer_email_\(sanitizedID).txt")
-        
-        let content = """
-        Subject: \(email.subject)
-        From: \(email.sender)
-        Date: \(email.date)
-        ---
-        \(email.bodyText)
-        """
-        
-        do {
-            try content.write(to: fileURL, atomically: true, encoding: .utf8)
-            print("[EmailFetchService] Cached: \(fileURL.lastPathComponent)")
-        } catch {
-            print("[EmailFetchService] Cache write failed: \(error.localizedDescription)")
-        }
-    }
-    
     // MARK: - Gmail Message Parsing
     
     private func parsedGmailMessage(_ message: GmailMessage) -> FetchedEmail? {
@@ -196,7 +198,6 @@ class EmailFetchService {
             date = Date()
         }
         
-        // Extract body text from parts
         let bodyText = extractGmailBody(from: message.payload)
         guard !bodyText.isEmpty else { return nil }
         
@@ -204,7 +205,6 @@ class EmailFetchService {
     }
     
     private func extractGmailBody(from payload: GmailPayload) -> String {
-        // Check if the payload itself has body data
         if let bodyData = payload.body?.data, !bodyData.isEmpty {
             if let decoded = base64URLDecode(bodyData) {
                 let text = payload.mimeType == "text/html" ? stripHTML(from: decoded) : decoded
@@ -214,9 +214,7 @@ class EmailFetchService {
             }
         }
         
-        // Recurse into parts, preferring text/plain over text/html
         if let parts = payload.parts {
-            // Try text/plain first
             for part in parts {
                 if part.mimeType == "text/plain", let data = part.body?.data, !data.isEmpty {
                     if let decoded = base64URLDecode(data) {
@@ -224,7 +222,6 @@ class EmailFetchService {
                     }
                 }
             }
-            // Fall back to text/html
             for part in parts {
                 if part.mimeType == "text/html", let data = part.body?.data, !data.isEmpty {
                     if let decoded = base64URLDecode(data) {
@@ -232,7 +229,6 @@ class EmailFetchService {
                     }
                 }
             }
-            // Recurse deeper (multipart/alternative etc.)
             for part in parts {
                 let result = extractGmailBody(from: part)
                 if !result.isEmpty { return result }
@@ -247,7 +243,6 @@ class EmailFetchService {
             .replacingOccurrences(of: "-", with: "+")
             .replacingOccurrences(of: "_", with: "/")
         
-        // Pad to multiple of 4
         let remainder = base64.count % 4
         if remainder > 0 {
             base64 += String(repeating: "=", count: 4 - remainder)
