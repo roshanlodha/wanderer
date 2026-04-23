@@ -14,6 +14,10 @@ struct SettingsView: View {
     @State private var googleConnected: Bool = false
     @State private var microsoftConnected: Bool = false
     
+    // AI Settings
+    @AppStorage("extractionEngine") private var extractionEngine: String = "Cloud (OpenAI)"
+    @State private var openAIApiKey: String = ""
+    
     var body: some View {
         NavigationStack {
             Form {
@@ -58,6 +62,26 @@ struct SettingsView: View {
                     Text("Connect your email to automatically import travel reservations. Emails are only fetched for trips you create, within the trip's date range.")
                 }
                 
+                // MARK: - AI Settings
+                Section {
+                    Picker("Extraction Engine", selection: $extractionEngine) {
+                        Text("Cloud (OpenAI)").tag("Cloud (OpenAI)")
+                        Text("Local (MLX)").tag("Local (MLX)")
+                    }
+                    .pickerStyle(.segmented)
+                    
+                    if extractionEngine == "Cloud (OpenAI)" {
+                        SecureField("OpenAI API Key", text: $openAIApiKey)
+                            .onChange(of: openAIApiKey) { _, newValue in
+                                KeychainManager.shared.save(newValue, forKey: .openAIApiKey)
+                            }
+                    }
+                } header: {
+                    Text("Intelligence")
+                } footer: {
+                    Text("Select where your emails are processed to extract itinerary details.")
+                }
+                
                 // MARK: - Error
                 if let errorMessage = errorMessage {
                     Section {
@@ -74,6 +98,9 @@ struct SettingsView: View {
             }
             .onAppear {
                 refreshConnectionState()
+                if let key = KeychainManager.shared.get(forKey: .openAIApiKey) {
+                    openAIApiKey = key
+                }
             }
         }
     }

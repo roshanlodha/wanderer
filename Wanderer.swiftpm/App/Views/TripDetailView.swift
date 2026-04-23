@@ -120,12 +120,28 @@ struct TripDetailView: View {
                 to: trip.endDate
             )
             
+            // Extract itinerary items from fetched emails
+            var newItems: [ItineraryItem] = []
+            for email in emails {
+                do {
+                    let extracted = try await ItineraryParserService.shared.parse(emailText: email.bodyText)
+                    newItems.append(contentsOf: extracted)
+                } catch {
+                    print("Error parsing email \(email.subject): \(error)")
+                }
+            }
+            
             await MainActor.run {
                 fetchedEmails = emails
+                for item in newItems {
+                    trip.items.append(item)
+                }
                 isSyncing = false
                 
                 if emails.isEmpty {
                     syncError = "No travel emails found for \(trip.name) (\(trip.startDate.formatted(.dateTime.month().day())) – \(trip.endDate.formatted(.dateTime.month().day())))."
+                } else if newItems.isEmpty {
+                    syncError = "Found \(emails.count) emails, but could not extract any itinerary items."
                 }
             }
         }

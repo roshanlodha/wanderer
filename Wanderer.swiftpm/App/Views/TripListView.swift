@@ -7,6 +7,7 @@ struct TripListView: View {
     
     @Binding var selectedTrip: Trip?
     @State private var showSettings = false
+    @State private var showAddTrip = false
     
     var body: some View {
         List(selection: $selectedTrip) {
@@ -41,48 +42,17 @@ struct TripListView: View {
                 }
             }
             ToolbarItem(placement: .primaryAction) {
-                Button(action: addSampleTrip) {
-                    Label("Add Sample Trip", systemImage: "plus")
+                Button(action: { showAddTrip = true }) {
+                    Label("Add Trip", systemImage: "plus")
                 }
             }
         }
         .sheet(isPresented: $showSettings) {
             SettingsView()
         }
-    }
-    
-    private func addSampleTrip() {
-        let newTrip = Trip(name: "Euro Trip", startDate: Date(), endDate: Date().addingTimeInterval(86400 * 14))
-        
-        let flight = ItineraryItem(
-            title: "Flight to London",
-            startTime: Date(),
-            endTime: Date().addingTimeInterval(3600 * 8),
-            locationName: "Heathrow Airport",
-            bookingReference: "AIR123",
-            travelMode: .flight
-        )
-        
-        let train = ItineraryItem(
-            title: "Eurostar to Paris",
-            startTime: Date().addingTimeInterval(86400 * 4),
-            endTime: Date().addingTimeInterval(86400 * 4 + 3600 * 2.5),
-            locationName: "Gare du Nord",
-            bookingReference: "EUR456",
-            travelMode: .train
-        )
-        
-        let hotel = ItineraryItem(
-            title: "Le Meurice",
-            startTime: Date().addingTimeInterval(86400 * 4 + 3600 * 4),
-            endTime: Date().addingTimeInterval(86400 * 8),
-            locationName: "228 Rue de Rivoli, Paris",
-            bookingReference: "HOTEL789",
-            travelMode: .hotel
-        )
-        
-        newTrip.items.append(contentsOf: [flight, train, hotel])
-        modelContext.insert(newTrip)
+        .sheet(isPresented: $showAddTrip) {
+            AddTripView()
+        }
     }
     
     private func deleteTrips(offsets: IndexSet) {

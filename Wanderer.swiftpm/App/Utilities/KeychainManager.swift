@@ -19,6 +19,7 @@ struct KeychainManager {
         case microsoftAccessToken = "microsoft_access_token"
         case microsoftRefreshToken = "microsoft_refresh_token"
         case appleUserIdentifier = "apple_user_identifier"
+        case openAIApiKey = "openai_api_key"
     }
     
     // MARK: - Save
