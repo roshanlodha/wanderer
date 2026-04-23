@@ -14,7 +14,7 @@ enum OAuthConfig {
     enum Google {
         /// Create at: https://console.cloud.google.com/apis/credentials
         /// Type: iOS app (or "Desktop app" for Mac Catalyst)
-        static let clientID = "YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com"
+        static let clientID = "251569997541-p9broteupleia5q0rjlpp88qu3t53hca.apps.googleusercontent.com"
         
         /// For iOS native apps, Google uses the reversed client ID as the redirect URI scheme.
         /// e.g. "com.googleusercontent.apps.YOUR_CLIENT_ID"
