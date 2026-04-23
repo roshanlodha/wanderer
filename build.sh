@@ -6,6 +6,6 @@ echo "Building Wanderer.swiftpm..."
 cd "$(dirname "$0")"
 cd Wanderer.swiftpm
 
-swift build
+xcodebuild -scheme Wanderer -destination 'platform=macOS' -workspace .
 
 echo "Build successful!"
