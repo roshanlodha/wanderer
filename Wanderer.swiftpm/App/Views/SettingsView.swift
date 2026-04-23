@@ -47,11 +47,20 @@ struct SettingsView: View {
                         if isConnectingGoogle {
                             ProgressView()
                         } else if googleConnected {
+                            HStack(spacing: 4) {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundColor(.green)
+                                Text("Connected")
+                                    .foregroundColor(.secondary)
+                            }
+                            .font(.subheadline)
+                            
                             Button("Disconnect", role: .destructive) {
                                 oauthService.disconnect(provider: .google)
                                 googleConnected = false
                             }
                             .buttonStyle(.borderless)
+                            .padding(.leading, 8)
                         } else {
                             Button("Connect") {
                                 connectProvider(.google)
@@ -70,11 +79,20 @@ struct SettingsView: View {
                         if isConnectingMicrosoft {
                             ProgressView()
                         } else if microsoftConnected {
+                            HStack(spacing: 4) {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundColor(.green)
+                                Text("Connected")
+                                    .foregroundColor(.secondary)
+                            }
+                            .font(.subheadline)
+                            
                             Button("Disconnect", role: .destructive) {
                                 oauthService.disconnect(provider: .microsoft)
                                 microsoftConnected = false
                             }
                             .buttonStyle(.borderless)
+                            .padding(.leading, 8)
                         } else {
                             Button("Connect") {
                                 connectProvider(.microsoft)

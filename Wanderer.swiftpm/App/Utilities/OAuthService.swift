@@ -15,11 +15,12 @@ enum OAuthConfig {
         /// Create at: https://console.cloud.google.com/apis/credentials
         /// Type: iOS app (or "Desktop app" for Mac Catalyst)
         static let clientID = "251569997541-p9broteupleia5q0rjlpp88qu3t53hca.apps.googleusercontent.com"
+        static let clientSecret = "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"
         
-        /// For iOS native apps, Google uses the reversed client ID as the redirect URI scheme.
-        /// e.g. "com.googleusercontent.apps.YOUR_CLIENT_ID"
-        /// For ASWebAuthenticationSession, we use our custom scheme:
-        static let redirectURI = "wanderer://oauth2/google"
+        /// Google requires the reversed client ID as the redirect URI scheme for native apps.
+        /// Format: com.googleusercontent.apps.<CLIENT_ID_PREFIX>:/oauthredirect
+        static let reversedClientID = "com.googleusercontent.apps.251569997541-p9broteupleia5q0rjlpp88qu3t53hca"
+        static let redirectURI = "com.googleusercontent.apps.251569997541-p9broteupleia5q0rjlpp88qu3t53hca:/oauthredirect"
         
         static let authEndpoint = "https://accounts.google.com/o/oauth2/v2/auth"
         static let tokenEndpoint = "https://oauth2.googleapis.com/token"
@@ -62,7 +63,14 @@ class OAuthService: NSObject, ASWebAuthenticationPresentationContextProviding {
         case google
         case microsoft
         
-        var callbackScheme: String { "wanderer" }
+        var callbackScheme: String {
+            switch self {
+            case .google:
+                return OAuthConfig.Google.reversedClientID
+            case .microsoft:
+                return "wanderer"
+            }
+        }
     }
     
     private var authSession: ASWebAuthenticationSession?
@@ -186,6 +194,7 @@ class OAuthService: NSObject, ASWebAuthenticationPresentationContextProviding {
             case .google:
                 return (OAuthConfig.Google.tokenEndpoint, [
                     "client_id": OAuthConfig.Google.clientID,
+                    "client_secret": OAuthConfig.Google.clientSecret,
                     "code": code,
                     "code_verifier": codeVerifier,
                     "grant_type": "authorization_code",
