@@ -42,17 +42,17 @@ let package = Package(
         )
     ],
     dependencies: [
-        .package(url: "https://github.com/ml-explore/mlx-swift", from: "0.14.0")
+        .package(url: "https://github.com/ml-explore/mlx-swift", "0.14.0"..<"1.0.0")
     ],
     targets: [
         .executableTarget(
             name: "AppModule",
+            dependencies: [
+                .product(name: "MLX", package: "mlx-swift")
+            ],
             path: "App",
             resources: [
                 .process("Secrets.plist")
-            ],
-            dependencies: [
-                .product(name: "MLX", package: "mlx-swift")
             ]
         )
     ]
