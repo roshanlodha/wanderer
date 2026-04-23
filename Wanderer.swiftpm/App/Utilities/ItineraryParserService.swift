@@ -196,7 +196,7 @@ class ItineraryParserService {
     
     private func parseWithAppleIntelligence(text: String) async throws -> [ExtractedItineraryItem] {
         #if canImport(FoundationModels)
-        if #available(iOS 18.0, macOS 15.0, *) {
+        if #available(iOS 18.0, macOS 15.0, macCatalyst 26.0, *) {
             print("[ItineraryParserService] Running Apple Intelligence on-device extraction...")
             let session = LanguageModelSession()
             let prompt = "\(systemPrompt)\n\nRAW EMAIL TEXT:\n\(text)"
