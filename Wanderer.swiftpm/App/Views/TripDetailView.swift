@@ -115,8 +115,9 @@ struct TripDetailView: View {
         syncError = nil
         
         Task {
+            let searchStartDate = Calendar.current.date(byAdding: .year, value: -1, to: trip.startDate) ?? trip.startDate
             let emails = await EmailFetchService.shared.fetchTravelEmails(
-                from: trip.startDate,
+                from: searchStartDate,
                 to: trip.endDate
             )
             
