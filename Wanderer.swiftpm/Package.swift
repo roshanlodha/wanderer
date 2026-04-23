@@ -37,7 +37,8 @@ let package = Package(
             capabilities: [
                 .incomingNetworkConnections(),
                 .outgoingNetworkConnections()
-            ]
+            ],
+            additionalInfoPlistContentFilePath: "Info.plist"
         )
     ],
     targets: [

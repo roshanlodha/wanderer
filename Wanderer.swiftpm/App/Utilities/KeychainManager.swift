@@ -4,31 +4,46 @@ import Security
 struct KeychainManager {
     static let shared = KeychainManager()
     
-    private let service = "com.wanderer.apikey"
+    private let service = "com.roshanlodha.Wanderer"
     
-    func saveAPIKey(_ key: String) throws {
-        guard let data = key.data(using: .utf8) else { return }
+    // MARK: - Token Keys
+    
+    enum TokenKey: String {
+        case googleAccessToken = "google_access_token"
+        case googleRefreshToken = "google_refresh_token"
+        case microsoftAccessToken = "microsoft_access_token"
+        case microsoftRefreshToken = "microsoft_refresh_token"
+        case appleUserIdentifier = "apple_user_identifier"
+    }
+    
+    // MARK: - Save
+    
+    @discardableResult
+    func save(_ value: String, forKey key: TokenKey) -> Bool {
+        guard let data = value.data(using: .utf8) else { return false }
         
-        // Delete existing before adding
-        deleteAPIKey()
+        // Delete existing value first to avoid duplicates
+        delete(forKey: key)
         
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
+            kSecAttrAccount as String: key.rawValue,
             kSecValueData as String: data,
             kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlocked
         ]
         
         let status = SecItemAdd(query as CFDictionary, nil)
-        guard status == errSecSuccess else {
-            throw NSError(domain: NSOSStatusErrorDomain, code: Int(status), userInfo: nil)
-        }
+        return status == errSecSuccess
     }
     
-    func getAPIKey() -> String? {
+    // MARK: - Retrieve
+    
+    func get(forKey key: TokenKey) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
+            kSecAttrAccount as String: key.rawValue,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
@@ -43,12 +58,29 @@ struct KeychainManager {
         return String(data: data, encoding: .utf8)
     }
     
-    func deleteAPIKey() {
+    // MARK: - Delete
+    
+    @discardableResult
+    func delete(forKey key: TokenKey) -> Bool {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key.rawValue
         ]
         
-        SecItemDelete(query as CFDictionary)
+        let status = SecItemDelete(query as CFDictionary)
+        return status == errSecSuccess || status == errSecItemNotFound
+    }
+    
+    // MARK: - Convenience
+    
+    func hasToken(forKey key: TokenKey) -> Bool {
+        return get(forKey: key) != nil
+    }
+    
+    func clearAllTokens() {
+        for key in [TokenKey.googleAccessToken, .googleRefreshToken, .microsoftAccessToken, .microsoftRefreshToken] {
+            delete(forKey: key)
+        }
     }
 }

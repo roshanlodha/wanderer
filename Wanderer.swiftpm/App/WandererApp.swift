@@ -39,9 +39,7 @@ struct WandererApp: App {
         .modelContainer(sharedModelContainer)
         .onChange(of: scenePhase) { oldPhase, newPhase in
             if newPhase == .background {
-                #if os(iOS)
                 BackgroundTaskManager.shared.scheduleEmailFetch()
-                #endif
             }
         }
     }

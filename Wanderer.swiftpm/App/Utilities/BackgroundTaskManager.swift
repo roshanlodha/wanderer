@@ -6,10 +6,10 @@ import BackgroundTasks
 class BackgroundTaskManager {
     static let shared = BackgroundTaskManager()
     
-    let emailFetchTaskIdentifier = "com.wanderer.fetchEmails"
+    let emailFetchTaskIdentifier = "com.roshanlodha.Wanderer.fetchEmails"
     
     func registerBackgroundTasks() {
-        #if os(iOS) && canImport(BackgroundTasks)
+        #if os(iOS)
         BGTaskScheduler.shared.register(forTaskWithIdentifier: emailFetchTaskIdentifier, using: nil) { task in
             guard let appRefreshTask = task as? BGAppRefreshTask else { return }
             self.handleEmailFetch(task: appRefreshTask)
@@ -17,44 +17,35 @@ class BackgroundTaskManager {
         #endif
     }
     
-    #if os(iOS) && canImport(BackgroundTasks)
     func scheduleEmailFetch() {
+        #if os(iOS)
         let request = BGAppRefreshTaskRequest(identifier: emailFetchTaskIdentifier)
-        // Schedule next fetch in 15 minutes at the earliest
         request.earliestBeginDate = Date(timeIntervalSinceNow: 15 * 60)
         
         do {
             try BGTaskScheduler.shared.submit(request)
-            print("Scheduled background task successfully.")
+            print("[BackgroundTaskManager] Scheduled background email fetch.")
         } catch {
-            print("Could not schedule background task: \(error)")
+            print("[BackgroundTaskManager] Could not schedule: \(error)")
         }
+        #endif
     }
     
+    #if os(iOS)
     private func handleEmailFetch(task: BGAppRefreshTask) {
-        // Schedule the next fetch as soon as this one starts
+        // Schedule the next fetch immediately
         scheduleEmailFetch()
         
-        // Setup an expiration handler to cleanly cancel if the system terminates the task early
-        let fetchWorkItem = DispatchWorkItem {
-            IMAPClientService.shared.fetchRecentTravelEmails { result in
-                switch result {
-                case .success(let emails):
-                    print("Fetched \(emails.count) travel emails in background.")
-                    task.setTaskCompleted(success: true)
-                case .failure(let error):
-                    print("Background fetch failed: \(error)")
-                    task.setTaskCompleted(success: false)
-                }
-            }
+        let fetchTask = Task {
+            let emails = await EmailFetchService.shared.fetchAllTravelEmails()
+            print("[BackgroundTaskManager] Background fetch completed: \(emails.count) emails.")
+            task.setTaskCompleted(success: true)
         }
         
         task.expirationHandler = {
-            fetchWorkItem.cancel()
+            fetchTask.cancel()
             task.setTaskCompleted(success: false)
         }
-        
-        DispatchQueue.global(qos: .background).async(execute: fetchWorkItem)
     }
     #endif
 }

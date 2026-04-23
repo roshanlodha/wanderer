@@ -1,99 +1,193 @@
 import SwiftUI
+import AuthenticationServices
 
 struct SettingsView: View {
     @Environment(AuthManager.self) var authManager
-    private let oauthService = OAuthService()
+    @Environment(\.dismiss) private var dismiss
     
+    @State private var oauthService = OAuthService()
     @State private var isConnectingGoogle = false
     @State private var isConnectingMicrosoft = false
+    @State private var isSyncing = false
     @State private var errorMessage: String?
+    @State private var syncResultCount: Int?
+    
+    // Reactive connected state
+    @State private var googleConnected: Bool = false
+    @State private var microsoftConnected: Bool = false
     
     var body: some View {
         NavigationStack {
             Form {
+                // MARK: - Account
                 Section(header: Text("Account")) {
                     if authManager.isGuest {
-                        Text("Signed in as Guest")
+                        Label("Signed in as Guest", systemImage: "person.crop.circle.badge.questionmark")
                             .foregroundColor(.secondary)
-                    } else if let id = authManager.userIdentifier {
-                        Text("Signed in with Apple")
+                    } else if authManager.userIdentifier != nil {
+                        Label("Signed in with Apple", systemImage: "apple.logo")
                             .badge("Connected")
                     }
                     
                     Button("Sign Out", role: .destructive) {
                         authManager.signOut()
+                        dismiss()
                     }
                 }
                 
-                Section(header: Text("Email Sync"), footer: Text("Connect your email to automatically import travel reservations.")) {
-                    Button(action: { connectGoogle() }) {
-                        HStack {
-                            Image(systemName: "envelope.fill")
-                                .foregroundColor(.red)
-                            Text("Connect Google")
-                            Spacer()
-                            if isConnectingGoogle {
-                                ProgressView()
+                // MARK: - Email Sync
+                Section {
+                    // Google row
+                    HStack {
+                        Image(systemName: "envelope.fill")
+                            .foregroundColor(.red)
+                        Text("Google")
+                        Spacer()
+                        
+                        if isConnectingGoogle {
+                            ProgressView()
+                        } else if googleConnected {
+                            Button("Disconnect", role: .destructive) {
+                                oauthService.disconnect(provider: .google)
+                                googleConnected = false
                             }
+                            .buttonStyle(.borderless)
+                        } else {
+                            Button("Connect") {
+                                connectProvider(.google)
+                            }
+                            .buttonStyle(.borderless)
                         }
                     }
-                    .disabled(isConnectingGoogle || isConnectingMicrosoft)
                     
-                    Button(action: { connectMicrosoft() }) {
-                        HStack {
-                            Image(systemName: "envelope.fill")
-                                .foregroundColor(.blue)
-                            Text("Connect Microsoft")
-                            Spacer()
-                            if isConnectingMicrosoft {
-                                ProgressView()
+                    // Microsoft row
+                    HStack {
+                        Image(systemName: "envelope.fill")
+                            .foregroundColor(.blue)
+                        Text("Microsoft")
+                        Spacer()
+                        
+                        if isConnectingMicrosoft {
+                            ProgressView()
+                        } else if microsoftConnected {
+                            Button("Disconnect", role: .destructive) {
+                                oauthService.disconnect(provider: .microsoft)
+                                microsoftConnected = false
                             }
+                            .buttonStyle(.borderless)
+                        } else {
+                            Button("Connect") {
+                                connectProvider(.microsoft)
+                            }
+                            .buttonStyle(.borderless)
                         }
                     }
-                    .disabled(isConnectingGoogle || isConnectingMicrosoft)
+                } header: {
+                    Text("Email Sync")
+                } footer: {
+                    Text("Connect your email to automatically import travel reservations like flights, hotels, and tickets.")
                 }
                 
+                // MARK: - Manual Sync
+                if googleConnected || microsoftConnected {
+                    Section {
+                        Button {
+                            syncNow()
+                        } label: {
+                            HStack {
+                                Image(systemName: "arrow.triangle.2.circlepath")
+                                Text("Sync Now")
+                                Spacer()
+                                if isSyncing {
+                                    ProgressView()
+                                }
+                                if let count = syncResultCount {
+                                    Text("\(count) emails")
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                        }
+                        .disabled(isSyncing)
+                    } header: {
+                        Text("Manual Sync")
+                    } footer: {
+                        Text("Fetch recent travel emails from connected accounts.")
+                    }
+                }
+                
+                // MARK: - Error
                 if let errorMessage = errorMessage {
                     Section {
-                        Text(errorMessage)
+                        Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
                             .foregroundColor(.red)
                     }
                 }
             }
             .navigationTitle("Settings")
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+            .onAppear {
+                refreshConnectionState()
+            }
         }
     }
     
-    private func connectGoogle() {
-        isConnectingGoogle = true
+    // MARK: - Actions
+    
+    private func refreshConnectionState() {
+        let keychain = KeychainManager.shared
+        googleConnected = keychain.hasToken(forKey: .googleAccessToken)
+        microsoftConnected = keychain.hasToken(forKey: .microsoftAccessToken)
+    }
+    
+    private func connectProvider(_ provider: OAuthService.Provider) {
         errorMessage = nil
-        oauthService.authenticate(provider: .google) { result in
-            DispatchQueue.main.async {
-                self.isConnectingGoogle = false
-                switch result {
-                case .success(let token):
-                    print("Google connected successfully. Token: \(token)")
-                    // Save token securely
-                case .failure(let error):
-                    self.errorMessage = error.localizedDescription
+        
+        switch provider {
+        case .google: isConnectingGoogle = true
+        case .microsoft: isConnectingMicrosoft = true
+        }
+        
+        Task {
+            do {
+                _ = try await oauthService.authenticate(provider: provider)
+                await MainActor.run {
+                    refreshConnectionState()
+                }
+            } catch {
+                await MainActor.run {
+                    // Don't show error for user-cancelled sessions (code 1 = canceledLogin)
+                    let nsError = error as NSError
+                    if nsError.domain == "com.apple.AuthenticationServices.WebAuthenticationSession" && nsError.code == 1 {
+                        // User cancelled — no error to show
+                    } else {
+                        self.errorMessage = error.localizedDescription
+                    }
+                }
+            }
+            
+            await MainActor.run {
+                switch provider {
+                case .google: isConnectingGoogle = false
+                case .microsoft: isConnectingMicrosoft = false
                 }
             }
         }
     }
     
-    private func connectMicrosoft() {
-        isConnectingMicrosoft = true
+    private func syncNow() {
+        isSyncing = true
+        syncResultCount = nil
         errorMessage = nil
-        oauthService.authenticate(provider: .microsoft) { result in
-            DispatchQueue.main.async {
-                self.isConnectingMicrosoft = false
-                switch result {
-                case .success(let token):
-                    print("Microsoft connected successfully. Token: \(token)")
-                    // Save token securely
-                case .failure(let error):
-                    self.errorMessage = error.localizedDescription
-                }
+        
+        Task {
+            let emails = await EmailFetchService.shared.fetchAllTravelEmails()
+            await MainActor.run {
+                syncResultCount = emails.count
+                isSyncing = false
             }
         }
     }
