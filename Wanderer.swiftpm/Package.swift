@@ -10,8 +10,8 @@ import AppleProductTypes
 let package = Package(
     name: "Wanderer",
     platforms: [
-        .iOS("17.0"),
-        .macOS("14.0")
+        .iOS("18.0"),
+        .macOS("15.0")
     ],
     products: [
         .iOSApplication(
@@ -41,12 +41,18 @@ let package = Package(
             additionalInfoPlistContentFilePath: "Info.plist"
         )
     ],
+    dependencies: [
+        .package(url: "https://github.com/ml-explore/mlx-swift", from: "0.14.0")
+    ],
     targets: [
         .executableTarget(
             name: "AppModule",
             path: "App",
             resources: [
                 .process("Secrets.plist")
+            ],
+            dependencies: [
+                .product(name: "MLX", package: "mlx-swift")
             ]
         )
     ]

@@ -66,6 +66,7 @@ struct SettingsView: View {
                 Section {
                     Picker("Extraction Engine", selection: $extractionEngine) {
                         Text("Cloud (OpenAI)").tag("Cloud (OpenAI)")
+                        Text("Apple Intelligence").tag("Apple Intelligence")
                         Text("Local (MLX)").tag("Local (MLX)")
                     }
                     .pickerStyle(.segmented)
