@@ -27,6 +27,14 @@ struct ExtractionResult: Codable {
     let items: [ExtractedItineraryItem]
 }
 
+/// Lightweight classification used during email sync before extraction.
+/// - relevant: true if travel-related and worth showing in trip email results.
+/// - important: true if travel-related but not a concrete itinerary extraction candidate.
+struct EmailTriageResult: Codable {
+    let relevant: Bool
+    let important: Bool
+}
+
 class ItineraryParserService {
     static let shared = ItineraryParserService()
     
@@ -251,6 +259,21 @@ class ItineraryParserService {
     }
     
     // MARK: - Public API
+
+    /// Classify a fetched email as itinerary candidate, important non-itinerary, or irrelevant.
+    func classifyEmailForSearch(emailText: String, tripStartDate: Date? = nil, tripEndDate: Date? = nil) async throws -> EmailTriageResult {
+        let engine = UserDefaults.standard.string(forKey: "extractionEngine") ?? "Cloud (OpenAI)"
+        let contextText = buildContext(tripStartDate: tripStartDate, tripEndDate: tripEndDate)
+        let cleanedText = preprocessEmailText(emailText, maxChars: 4000)
+
+        if engine == "Cloud (OpenAI)" {
+            return try await classifyWithOpenAI(text: cleanedText, contextText: contextText)
+        }
+
+        // Fallback path for non-OpenAI engines: use full parse signal.
+        let parsed = try await parse(emailText: cleanedText, tripStartDate: tripStartDate, tripEndDate: tripEndDate)
+        return EmailTriageResult(relevant: parsed.relevant, important: parsed.relevant && parsed.items.isEmpty)
+    }
     
     /// Parse a single email. Returns (isRelevant, items).
     /// When the LLM determines the email is not travel-relevant, isRelevant is false and items is empty.
@@ -309,20 +332,129 @@ class ItineraryParserService {
     }
     
     // MARK: - OpenAI
+
+    private func selectedOpenAIModel() -> String {
+        let cloudModelSelection = UserDefaults.standard.string(forKey: "cloudModelSelection") ?? "Nano"
+        switch cloudModelSelection {
+        case "Mini": return "gpt-5-mini"
+        case "SOTA": return "gpt-5.5"
+        case "Nano": fallthrough
+        default: return "gpt-5-nano"
+        }
+    }
+
+    private func classifyWithOpenAI(text: String, contextText: String) async throws -> EmailTriageResult {
+        guard let apiKey = KeychainManager.shared.get(forKey: .openAIApiKey), !apiKey.isEmpty else {
+            throw ParserError.invalidAPIKey
+        }
+
+        let modelString = selectedOpenAIModel()
+        let url = URL(string: "https://api.openai.com/v1/chat/completions")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.addValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 60
+
+        let schema: [String: Any] = [
+            "type": "json_schema",
+            "json_schema": [
+                "name": "email_triage",
+                "strict": true,
+                "schema": [
+                    "type": "object",
+                    "properties": [
+                        "relevant": ["type": "boolean"],
+                        "important": ["type": "boolean"]
+                    ],
+                    "required": ["relevant", "important"],
+                    "additionalProperties": false
+                ]
+            ]
+        ]
+
+        let triageSystemPrompt = """
+        You classify travel emails for trip planning.
+        Return strict JSON only.
+
+        Definitions:
+        - relevant=true when the email is travel-related for the user's trip context.
+        - important=true only when the email is travel-related but does NOT contain concrete itinerary event details suitable for timeline extraction.
+        - If relevant=false, important must be false.
+        - Itinerary confirmations (flight, train, bus, hotel, booking confirmations with dates/times/locations) should be relevant=true and important=false.
+
+        \(contextText)
+        """
+
+        let body: [String: Any] = [
+            "model": modelString,
+            "messages": [
+                ["role": "system", "content": triageSystemPrompt],
+                ["role": "user", "content": text]
+            ],
+            "response_format": schema
+        ]
+
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw ParserError.networkError("Invalid response")
+        }
+
+        if httpResponse.statusCode == 429 {
+            try await Task.sleep(nanoseconds: 1_500_000_000)
+            return try await classifyWithOpenAI(text: text, contextText: contextText)
+        }
+
+        guard httpResponse.statusCode == 200 else {
+            let errorString = String(data: data, encoding: .utf8) ?? "Unknown Error"
+            print("[OpenAI:Triage] Error (\(httpResponse.statusCode)): \(errorString)")
+            throw ParserError.networkError("Status \(httpResponse.statusCode)")
+        }
+
+        struct OpenAIResponse: Codable {
+            struct Choice: Codable {
+                struct Message: Codable {
+                    let content: String?
+                    let refusal: String?
+                }
+                let message: Message
+            }
+            let choices: [Choice]
+        }
+
+        let openAIResponse = try JSONDecoder().decode(OpenAIResponse.self, from: data)
+        guard let choice = openAIResponse.choices.first else {
+            throw ParserError.parsingError("No choices in response")
+        }
+
+        if choice.message.refusal != nil {
+            return EmailTriageResult(relevant: false, important: false)
+        }
+
+        guard let contentString = choice.message.content,
+              let contentData = contentString.data(using: .utf8) else {
+            throw ParserError.parsingError("No content in response")
+        }
+
+        do {
+            let triage = try JSONDecoder().decode(EmailTriageResult.self, from: contentData)
+            if !triage.relevant {
+                return EmailTriageResult(relevant: false, important: false)
+            }
+            return triage
+        } catch {
+            throw ParserError.parsingError("Failed to decode triage response: \(error.localizedDescription)")
+        }
+    }
     
     private func parseWithOpenAI(text: String, systemPrompt: String) async throws -> ExtractionResult {
         guard let apiKey = KeychainManager.shared.get(forKey: .openAIApiKey), !apiKey.isEmpty else {
             throw ParserError.invalidAPIKey
         }
         
-        let cloudModelSelection = UserDefaults.standard.string(forKey: "cloudModelSelection") ?? "Nano"
-        let modelString: String
-        switch cloudModelSelection {
-        case "Mini": modelString = "gpt-5-mini"
-        case "SOTA": modelString = "gpt-5.5"
-        case "Nano": fallthrough
-        default: modelString = "gpt-5-nano"
-        }
+        let modelString = selectedOpenAIModel()
         
         let url = URL(string: "https://api.openai.com/v1/chat/completions")!
         var request = URLRequest(url: url)

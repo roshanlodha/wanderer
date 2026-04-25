@@ -11,7 +11,6 @@ struct TripDetailView: View {
     @State private var isExtracting = false
     @State private var fetchedEmails: [FetchedEmail] = []
     @State private var importantEmails: [FetchedEmail] = []
-    @State private var outsideRangeEmails: [FetchedEmail] = []
     @State private var emailStatuses: [String: FetchedEmail.ExtractionStatus] = [:]
     @State private var expandedEmailIds: Set<String> = []
     @State private var syncError: String?
@@ -48,7 +47,7 @@ struct TripDetailView: View {
     }
 
     var hasAnyEmailSections: Bool {
-        !fetchedEmails.isEmpty || !importantEmails.isEmpty || !outsideRangeEmails.isEmpty
+        !fetchedEmails.isEmpty || !importantEmails.isEmpty
     }
     
     var body: some View {
@@ -282,28 +281,14 @@ struct TripDetailView: View {
 
             if !importantEmails.isEmpty {
                 sectionHeader(title: "Important Emails", count: importantEmails.count, color: .indigo)
-                Text("Useful trip-related messages (like ETA/visa/insurance) that are not auto-included in itinerary parsing.")
+                Text("Useful trip-related messages identified by AI that are not auto-included in itinerary parsing.")
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .padding(.horizontal)
 
                 ForEach(importantEmails) { email in
                     secondaryEmailRow(email, label: "Important", labelColor: .indigo) {
-                        includeInItinerary(email: email, from: .important)
-                    }
-                }
-            }
-
-            if !outsideRangeEmails.isEmpty {
-                sectionHeader(title: "Outside Email Search Range", count: outsideRangeEmails.count, color: .orange)
-                Text("These emails are outside this trip's Email Search Date Range and are excluded from Extract All until included.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .padding(.horizontal)
-
-                ForEach(outsideRangeEmails) { email in
-                    secondaryEmailRow(email, label: "Outside Range", labelColor: .orange) {
-                        includeInItinerary(email: email, from: .outsideRange)
+                        includeInItinerary(email: email)
                     }
                 }
             }
@@ -327,11 +312,6 @@ struct TripDetailView: View {
         .padding(.horizontal)
     }
 
-    private enum EmailBucket {
-        case important
-        case outsideRange
-    }
-    
     // MARK: - Email Row
     
     @ViewBuilder
@@ -647,14 +627,10 @@ struct TripDetailView: View {
                     ), displayedComponents: .date)
                 }
                 
-                Section("Email Search Date Range") {
-                    DatePicker("Search Start", selection: Binding(
-                        get: { trip.emailSearchStartDate ?? trip.startDate },
-                        set: { trip.emailSearchStartDate = $0 }
-                    ), displayedComponents: .date)
-                    DatePicker("Search End", selection: Binding(
-                        get: { trip.emailSearchEndDate ?? trip.endDate },
-                        set: { trip.emailSearchEndDate = $0 }
+                Section("Email Filtering") {
+                    DatePicker("Ignore Emails Before", selection: Binding(
+                        get: { trip.ignoreEmailsBeforeDate ?? computedIgnoreEmailsBeforeDate },
+                        set: { trip.ignoreEmailsBeforeDate = $0 }
                     ), displayedComponents: .date)
                 }
             }
@@ -694,20 +670,14 @@ struct TripDetailView: View {
         withAnimation {
             fetchedEmails.removeAll { $0.id == email.id }
             importantEmails.removeAll { $0.id == email.id }
-            outsideRangeEmails.removeAll { $0.id == email.id }
             emailStatuses.removeValue(forKey: email.id)
             expandedEmailIds.remove(email.id)
         }
     }
 
-    private func includeInItinerary(email: FetchedEmail, from bucket: EmailBucket) {
+    private func includeInItinerary(email: FetchedEmail) {
         withAnimation {
-            switch bucket {
-            case .important:
-                importantEmails.removeAll { $0.id == email.id }
-            case .outsideRange:
-                outsideRangeEmails.removeAll { $0.id == email.id }
-            }
+            importantEmails.removeAll { $0.id == email.id }
 
             if !fetchedEmails.contains(where: { $0.id == email.id }) {
                 fetchedEmails.append(email)
@@ -760,20 +730,16 @@ struct TripDetailView: View {
         }
     }
 
-    private var effectiveEmailSearchRange: (start: Date, end: Date) {
-        // Default to trip dates with 7-day buffer on each side if not explicitly set
-        let searchStart = trip.emailSearchStartDate ?? (Calendar.current.date(byAdding: .day, value: -7, to: trip.startDate) ?? trip.startDate)
-        let searchEnd = trip.emailSearchEndDate ?? (Calendar.current.date(byAdding: .day, value: 7, to: trip.endDate) ?? trip.endDate)
-        
-        let start = Calendar.current.startOfDay(for: searchStart)
-        let endBase = Calendar.current.startOfDay(for: searchEnd)
-        let end = endBase.addingTimeInterval(86400 - 1)
-        return (start, end)
+    private var computedIgnoreEmailsBeforeDate: Date {
+        trip.ignoreEmailsBeforeDate ?? (Calendar.current.date(byAdding: .day, value: -7, to: trip.startDate) ?? trip.startDate)
     }
 
-    private func isWithinEmailSearchRange(_ email: FetchedEmail) -> Bool {
-        let range = effectiveEmailSearchRange
-        return email.date >= range.start && email.date <= range.end
+    private var effectiveIgnoreEmailsBefore: Date {
+        Calendar.current.startOfDay(for: computedIgnoreEmailsBeforeDate)
+    }
+
+    private func isIgnoredByDateFilter(_ email: FetchedEmail) -> Bool {
+        email.date < effectiveIgnoreEmailsBefore
     }
 
     private func isForwardedSubject(_ subject: String) -> Bool {
@@ -793,27 +759,6 @@ struct TripDetailView: View {
         return (kept, removedCount)
     }
 
-    private func isImportantNonItineraryEmail(_ email: FetchedEmail) -> Bool {
-        let text = "\(email.subject) \(email.bodyText)".lowercased()
-
-        let importantSignals = [
-            "electronic travel authorization", "travel authorization", "eta",
-            "visa", "e-visa", "entry permit", "esta", "passport",
-            "immigration", "travel insurance", "insurance certificate",
-            "health declaration", "entry requirements"
-        ]
-
-        let itinerarySignals = [
-            "reservation confirmation", "booking confirmation", "itinerary",
-            "flight", "check-in", "check in", "hotel", "room",
-            "ticket", "boarding pass", "train", "bus"
-        ]
-
-        let isImportant = importantSignals.contains { text.contains($0) }
-        let isItineraryLike = itinerarySignals.contains { text.contains($0) }
-        return isImportant && !isItineraryLike
-    }
-    
     // MARK: - Phase 1: Fetch Emails (no extraction)
     
     private func fetchEmails() {
@@ -829,16 +774,50 @@ struct TripDetailView: View {
             
             let emails = await EmailFetchService.shared.fetchTravelEmails()
             let secondPass = applySecondPassItineraryFilter(emails)
-            let range = effectiveEmailSearchRange
-            let inRange = secondPass.kept.filter { isWithinEmailSearchRange($0) }
-            let outsideRange = secondPass.kept.filter { !isWithinEmailSearchRange($0) }
-            let important = inRange.filter { isImportantNonItineraryEmail($0) }
-            let itinerary = inRange.filter { !isImportantNonItineraryEmail($0) }
+            let keptAfterDate = secondPass.kept.filter { !isIgnoredByDateFilter($0) }
+            let ignoredBeforeCount = secondPass.kept.count - keptAfterDate.count
+
+            await MainActor.run {
+                syncStatus = "Classifying \(keptAfterDate.count) emails with AI..."
+                syncTotal = Double(keptAfterDate.count)
+                syncProgress = 0
+            }
+
+            var itinerary: [FetchedEmail] = []
+            var important: [FetchedEmail] = []
+            var irrelevantCount = 0
+
+            for (index, email) in keptAfterDate.enumerated() {
+                do {
+                    let triage = try await ItineraryParserService.shared.classifyEmailForSearch(
+                        emailText: "Subject: \(email.subject)\nFrom: \(email.sender)\n\n\(email.bodyText)",
+                        tripStartDate: trip.startDate,
+                        tripEndDate: trip.endDate
+                    )
+
+                    if triage.relevant {
+                        if triage.important {
+                            important.append(email)
+                        } else {
+                            itinerary.append(email)
+                        }
+                    } else {
+                        irrelevantCount += 1
+                    }
+                } catch {
+                    // Fail open to avoid losing potentially valid itinerary emails.
+                    itinerary.append(email)
+                    print("[TripDetailView] Triage failed for email '\(email.subject)': \(error.localizedDescription)")
+                }
+
+                await MainActor.run {
+                    syncProgress = Double(index + 1)
+                }
+            }
             
             await MainActor.run {
                 fetchedEmails = itinerary.sorted { $0.date > $1.date }
                 importantEmails = important.sorted { $0.date > $1.date }
-                outsideRangeEmails = outsideRange.sorted { $0.date > $1.date }
                 // Initialize all statuses to pending
                 emailStatuses = [:]
                 for email in itinerary {
@@ -846,16 +825,17 @@ struct TripDetailView: View {
                 }
                 isFetchingEmails = false
                 
-                if secondPass.kept.isEmpty {
+                if emails.isEmpty {
                     syncError = "No travel-related emails found. Try connecting an email account in Settings or check that you have travel confirmation emails."
                 } else {
                     var statusParts: [String] = []
                     statusParts.append("Itinerary: \(itinerary.count)")
                     if !important.isEmpty { statusParts.append("Important: \(important.count)") }
-                    if !outsideRange.isEmpty { statusParts.append("Outside range: \(outsideRange.count)") }
+                    if ignoredBeforeCount > 0 { statusParts.append("Ignored before date: \(ignoredBeforeCount)") }
+                    if irrelevantCount > 0 { statusParts.append("Not trip-related: \(irrelevantCount)") }
                     if secondPass.removedCount > 0 { statusParts.append("FW removed: \(secondPass.removedCount)") }
                     syncStatus = statusParts.joined(separator: " · ")
-                    print("[TripDetailView] Email search range: \(range.start) to \(range.end)")
+                    print("[TripDetailView] Ignore emails before: \(effectiveIgnoreEmailsBefore)")
                 }
             }
         }

@@ -7,6 +7,7 @@ final class Trip {
     var name: String
     var startDate: Date
     var endDate: Date
+    var ignoreEmailsBeforeDate: Date?
     var emailSearchStartDate: Date?
     var emailSearchEndDate: Date?
     
@@ -17,12 +18,14 @@ final class Trip {
         name: String,
         startDate: Date,
         endDate: Date,
+        ignoreEmailsBeforeDate: Date? = nil,
         emailSearchStartDate: Date? = nil,
         emailSearchEndDate: Date? = nil
     ) {
         self.name = name
         self.startDate = startDate
         self.endDate = endDate
+        self.ignoreEmailsBeforeDate = ignoreEmailsBeforeDate
         self.emailSearchStartDate = emailSearchStartDate
         self.emailSearchEndDate = emailSearchEndDate
     }
