@@ -16,6 +16,7 @@ struct SettingsView: View {
     
     // AI Settings
     @AppStorage("extractionEngine") private var extractionEngine: String = "Cloud (OpenAI)"
+    @AppStorage("cloudModelSelection") private var cloudModelSelection: String = "Nano"
     @State private var openAIApiKey: String = ""
     
     var body: some View {
@@ -72,6 +73,12 @@ struct SettingsView: View {
                     .pickerStyle(.segmented)
                     
                     if extractionEngine == "Cloud (OpenAI)" {
+                        Picker("Cloud Model", selection: $cloudModelSelection) {
+                            Text("Mini").tag("Mini")
+                            Text("Nano").tag("Nano")
+                            Text("SOTA").tag("SOTA")
+                        }
+                        
                         SecureField("OpenAI API Key", text: $openAIApiKey)
                             .onChange(of: openAIApiKey) { _, newValue in
                                 KeychainManager.shared.save(newValue, forKey: .openAIApiKey)

@@ -10,13 +10,13 @@ import MLX
 #endif
 
 struct ExtractedItineraryItem: Codable {
-    let title: String
-    let startTime: Date
+    let title: String?
+    let startTime: Date?
     let endTime: Date?
-    let locationName: String
+    let locationName: String?
     let provider: String?
     let bookingReference: String?
-    let travelMode: TravelMode
+    let travelMode: String?
     let notes: String?
 }
 
@@ -255,17 +255,22 @@ class ItineraryParserService {
         }
         
         // Map to SwiftData objects (without context or trip initially)
-        let items = result.items.map { item in
-            ItineraryItem(
-                title: item.title,
-                startTime: item.startTime,
+        let items = result.items.compactMap { item -> ItineraryItem? in
+            guard let start = item.startTime else { return nil }
+            
+            let tModeStr = item.travelMode?.lowercased() ?? "other"
+            let tMode = TravelMode.allCases.first(where: { $0.rawValue.lowercased() == tModeStr }) ?? .other
+            
+            return ItineraryItem(
+                title: item.title ?? "Unknown Travel Event",
+                startTime: start,
                 endTime: item.endTime,
-                locationName: item.locationName,
+                locationName: item.locationName ?? "Unknown Location",
                 bookingReference: item.bookingReference,
                 provider: item.provider,
                 notes: item.notes,
                 rawTextSource: emailText,
-                travelMode: item.travelMode
+                travelMode: tMode
             )
         }
         
@@ -277,6 +282,15 @@ class ItineraryParserService {
     private func parseWithOpenAI(text: String, systemPrompt: String) async throws -> ExtractionResult {
         guard let apiKey = KeychainManager.shared.get(forKey: .openAIApiKey), !apiKey.isEmpty else {
             throw ParserError.invalidAPIKey
+        }
+        
+        let cloudModelSelection = UserDefaults.standard.string(forKey: "cloudModelSelection") ?? "Nano"
+        let modelString: String
+        switch cloudModelSelection {
+        case "Mini": modelString = "gpt-5-mini"
+        case "SOTA": modelString = "gpt-5.5"
+        case "Nano": fallthrough
+        default: modelString = "gpt-5-nano"
         }
         
         let url = URL(string: "https://api.openai.com/v1/chat/completions")!
@@ -324,7 +338,7 @@ class ItineraryParserService {
         ]
         
         let body: [String: Any] = [
-            "model": "gpt-5-mini",
+            "model": modelString,
             "messages": [
                 ["role": "system", "content": systemPrompt],
                 ["role": "user", "content": text]
@@ -453,22 +467,31 @@ class ItineraryParserService {
                 let decoder = customDateDecoder
                 
                 // Try to decode as ExtractionResult (with relevant field)
-                if let result = try? decoder.decode(ExtractionResult.self, from: contentData) {
+                do {
+                    let result = try decoder.decode(ExtractionResult.self, from: contentData)
                     return result
+                } catch {
+                    print("[AppleIntelligence] ExtractionResult decode failed: \(error)")
                 }
                 
                 // Fallback: decode as array (legacy format — assume relevant)
-                if let array = try? decoder.decode([ExtractedItineraryItem].self, from: contentData) {
+                do {
+                    let array = try decoder.decode([ExtractedItineraryItem].self, from: contentData)
                     return ExtractionResult(relevant: !array.isEmpty, items: array)
+                } catch {
+                    print("[AppleIntelligence] Array fallback decode failed: \(error)")
                 }
                 
                 // Fallback: object with items key but no relevant field
                 struct LegacyResult: Codable { let items: [ExtractedItineraryItem] }
-                if let obj = try? decoder.decode(LegacyResult.self, from: contentData) {
+                do {
+                    let obj = try decoder.decode(LegacyResult.self, from: contentData)
                     return ExtractionResult(relevant: !obj.items.isEmpty, items: obj.items)
+                } catch {
+                    print("[AppleIntelligence] LegacyResult decode failed: \(error)")
                 }
                 
-                throw ParserError.parsingError("Failed to parse Apple Intelligence JSON structure.")
+                throw ParserError.parsingError("Failed to parse Apple Intelligence JSON structure. JSON: \(jsonString)")
             } catch let error as ParserError {
                 throw error
             } catch {
@@ -511,7 +534,7 @@ class ItineraryParserService {
             locationName: "Local LLM Port",
             provider: "MLX Local",
             bookingReference: "MLX-SWIFT-1",
-            travelMode: .flight,
+            travelMode: "Flight",
             notes: nil
         )
         
