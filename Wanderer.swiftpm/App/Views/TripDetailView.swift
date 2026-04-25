@@ -20,6 +20,7 @@ struct TripDetailView: View {
     @State private var syncStatus: String = ""
     @State private var showAddItemSheet = false
     @State private var extractionTask: Task<Void, Never>?
+    @State private var showTripSettingsSheet = false
     
     // Manual add form state
     @State private var manualTitle = ""
@@ -79,6 +80,15 @@ struct TripDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
+                // Settings button
+                Button {
+                    showTripSettingsSheet = true
+                } label: {
+                    Image(systemName: "gear")
+                        .foregroundColor(.gray)
+                        .font(.title3)
+                }
+                
                 // Green plus — manual add
                 Button {
                     showAddItemSheet = true
@@ -111,6 +121,9 @@ struct TripDetailView: View {
         }
         .sheet(isPresented: $showAddItemSheet) {
             addItemSheet
+        }
+        .sheet(isPresented: $showTripSettingsSheet) {
+            tripSettingsSheet
         }
     }
     
@@ -608,6 +621,58 @@ struct TripDetailView: View {
                         addManualItem()
                     }
                     .disabled(manualTitle.isEmpty || manualLocation.isEmpty)
+                    .fontWeight(.semibold)
+                }
+            }
+        }
+    }
+    
+    // MARK: - Trip Settings Sheet
+    
+    private var tripSettingsSheet: some View {
+        NavigationView {
+            Form {
+                Section("Trip Details") {
+                    TextField("Trip Name", text: Binding(
+                        get: { trip.name },
+                        set: { trip.name = $0 }
+                    ))
+                    DatePicker("Trip Start Date", selection: Binding(
+                        get: { trip.startDate },
+                        set: { trip.startDate = $0 }
+                    ), displayedComponents: .date)
+                    DatePicker("Trip End Date", selection: Binding(
+                        get: { trip.endDate },
+                        set: { trip.endDate = $0 }
+                    ), displayedComponents: .date)
+                }
+                
+                Section("Email Search Date Range") {
+                    DatePicker("Search Start", selection: Binding(
+                        get: { trip.emailSearchStartDate ?? trip.startDate },
+                        set: { trip.emailSearchStartDate = $0 }
+                    ), displayedComponents: .date)
+                    DatePicker("Search End", selection: Binding(
+                        get: { trip.emailSearchEndDate ?? trip.endDate },
+                        set: { trip.emailSearchEndDate = $0 }
+                    ), displayedComponents: .date)
+                }
+            }
+            .navigationTitle("Trip Settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button {
+                        showTripSettingsSheet = false
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundColor(.red)
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") {
+                        showTripSettingsSheet = false
+                    }
                     .fontWeight(.semibold)
                 }
             }

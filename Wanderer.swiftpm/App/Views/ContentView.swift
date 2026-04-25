@@ -3,6 +3,7 @@ import SwiftData
 
 struct ContentView: View {
     @State private var selectedTrip: Trip?
+    @State private var showSettings = false
     
     var body: some View {
         NavigationSplitView {
@@ -13,6 +14,14 @@ struct ContentView: View {
             } else {
                 ContentUnavailableView("Select a Trip", systemImage: "map", description: Text("Choose a trip from the sidebar to view its itinerary."))
             }
+        }
+        .keyboardShortcut(",", modifiers: .command)
+        .onKeyPress(.command(",")) { press in
+            showSettings.toggle()
+            return .handled
+        }
+        .sheet(isPresented: $showSettings) {
+            SettingsView()
         }
     }
 }

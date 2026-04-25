@@ -134,21 +134,22 @@ class ItineraryParserService {
             .replacingOccurrences(of: "&quot;", with: "\"")
             .replacingOccurrences(of: "&#39;", with: "'")
 
-        // Remove CSS declaration noise commonly found in raw confirmation emails.
-        cleaned = cleaned.replacingOccurrences(of: "(?i)\\.[a-z0-9_-]+\\s*\\{[^\\}]{0,1000}\\}", with: " ", options: .regularExpression)
-        cleaned = cleaned.replacingOccurrences(of: "(?i)@[a-z-]+\\s*[^\\{]*\\{[^\\}]{0,1000}\\}", with: " ", options: .regularExpression)
-        cleaned = cleaned.replacingOccurrences(of: "(?i)\\b[a-z-]+\\s*:\\s*[^;\\n]{1,120};", with: " ", options: .regularExpression)
+        // Remove only obviously problematic CSS blocks (class/id selectors with braces).
+        // Avoid matching real data patterns like "seat: 49" or "departure: 13:50".
+        cleaned = cleaned.replacingOccurrences(of: "(?i)\\.[a-z0-9_-]+\\s*\\{[^\\}]{0,500}\\}", with: " ", options: .regularExpression)
+        cleaned = cleaned.replacingOccurrences(of: "(?i)#[a-z0-9_-]+\\s*\\{[^\\}]{0,500}\\}", with: " ", options: .regularExpression)
+        cleaned = cleaned.replacingOccurrences(of: "(?i)@[a-z-]+\\s*[^\\{]*\\{[^\\}]{0,500}\\}", with: " ", options: .regularExpression)
 
         // Remove URLs (they waste tokens and confuse extraction)
         cleaned = cleaned.replacingOccurrences(of: "https?://[^\\s]+", with: "", options: .regularExpression)
         // Remove email signatures / legal boilerplate markers
         cleaned = cleaned.replacingOccurrences(of: "(?i)(unsubscribe|privacy policy|terms of service|view in browser|click here|manage preferences|email preferences).*", with: "", options: .regularExpression)
 
-        // Drop obvious preamble noise before the first travel-relevant anchor phrase.
+        // Drop obvious preamble noise before the first travel-relevant anchor phrase (only if >300 chars).
         let lowered = cleaned.lowercased()
         let anchors = [
             "reservation", "confirmation", "itinerary", "hotel", "flight",
-            "check-in", "check in", "booking", "arrival", "departure", "room"
+            "check-in", "check in", "booking", "ticket", "departure", "room", "train", "bus"
         ]
         if let firstAnchor = anchors.compactMap({ lowered.range(of: $0) }).map({ $0.lowerBound }).min(),
            cleaned.distance(from: cleaned.startIndex, to: firstAnchor) > 300 {
@@ -475,12 +476,12 @@ class ItineraryParserService {
             // Hard cap at 1500 chars for Apple Intelligence (much smaller context window)
             let truncatedText = String(text.prefix(1500))
             
-            let prompt = "\(condensedSystemPrompt)\n\(contextLine)\n\nEMAIL:\n\(truncatedText)"
+            let aiPrompt = "\(condensedSystemPrompt)\n\(contextLine)\n\nEMAIL:\n\(truncatedText)"
             
             print("[AppleIntelligence] Prompt length: \(prompt.count) chars")
             
             do {
-                let response = try await session.respond(to: prompt)
+                let response = try await session.respond(to: aiPrompt)
                 let contentString = response.content
                 
                 // Look for JSON object or array
@@ -548,10 +549,6 @@ class ItineraryParserService {
     private func parseWithLocalMLX(text: String, systemPrompt: String, tripStartDate: Date?) async throws -> ExtractionResult {
         // Finalized MLX Swift Port Structure
         print("[ItineraryParserService] Initializing MLX Swift Engine...")
-        
-        MLX.GPU.set(cacheLimit: 1024 * 1024 * 1024) // 1GB cache limit
-        
-        let prompt = "\(systemPrompt)\n\nRAW EMAIL TEXT:\n\(text)"
         
         // Simulating the MLX computation time and generating a robust fallback for the demo
         try await Task.sleep(nanoseconds: 2_000_000_000)
