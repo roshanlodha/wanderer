@@ -80,7 +80,12 @@ struct SettingsView: View {
                 } header: {
                     Text("Intelligence")
                 } footer: {
-                    Text("Select where your emails are processed to extract itinerary details.")
+                    if extractionEngine == "Apple Intelligence" {
+                        Text("Warning: Apple Intelligence has a limited context window. Large emails will be truncated and may lead to parsing errors.")
+                            .foregroundColor(.orange)
+                    } else {
+                        Text("Select where your emails are processed to extract itinerary details.")
+                    }
                 }
                 
                 // MARK: - Error
@@ -93,8 +98,12 @@ struct SettingsView: View {
             }
             .navigationTitle("Settings")
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(action: { dismiss() }) {
+                        Image(systemName: "checkmark")
+                            .foregroundColor(.blue)
+                            .fontWeight(.bold)
+                    }
                 }
             }
             .onAppear {

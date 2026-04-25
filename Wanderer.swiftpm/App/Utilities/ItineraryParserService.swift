@@ -28,42 +28,35 @@ class ItineraryParserService {
         case missingEngine
     }
     
-    private let systemPrompt = """
-    You are an expert travel assistant whose task is to meticulously extract chronological itinerary items from the provided raw email text. 
-    Review the email for flights, hotel check-ins/outs, bus/train rides, and activities.
-    
-    CRITICAL INSTRUCTIONS:
-    - Determine accurate start and end times (in ISO8601 format). For hotels, startTime is check-in (default 15:00 if unspecified) and endTime is check-out (default 11:00 if unspecified).
-    - Provide a descriptive 'title' (e.g., "Flight to LHR", "Check-in at Ritz").
-    - Give a specific 'locationName' containing the physical address or airport code.
-    - Extract any relevant 'bookingReference' (confirmation numbers, PNRs, etc.).
-    - Your response MUST be a strict JSON array of objects conforming to the provided schema. Output ONLY valid JSON, without markdown formatting.
-    
-    SCHEMA:
-    [
-        {
-            "title": "String",
-            "startTime": "ISO8601 Date String",
-            "endTime": "ISO8601 Date String",
-            "locationName": "String",
-            "bookingReference": "String (optional)",
-            "travelMode": "String (Flight, Hotel, Bus, Train, Activity)"
+    private var baseSystemPrompt: String {
+        if let url = Bundle.main.url(forResource: "SystemPrompt", withExtension: "txt"),
+           let content = try? String(contentsOf: url, encoding: .utf8) {
+            return content
         }
-    ]
-    """
+        return "You are an expert travel assistant tasked with extracting chronological itinerary items from raw email text."
+    }
     
-    func parse(emailText: String) async throws -> [ItineraryItem] {
+    func parse(emailText: String, tripStartDate: Date? = nil, tripEndDate: Date? = nil) async throws -> [ItineraryItem] {
         let engine = UserDefaults.standard.string(forKey: "extractionEngine") ?? "Cloud (OpenAI)"
+        
+        let dateFormatter = ISO8601DateFormatter()
+        dateFormatter.formatOptions = [.withYear, .withMonth, .withDay, .withDashSeparatorInDate]
+        var contextText = "CONTEXT INFO:\n- The current date is \(dateFormatter.string(from: Date())).\n"
+        if let start = tripStartDate, let end = tripEndDate {
+            contextText += "- The user's trip is scheduled from \(dateFormatter.string(from: start)) to \(dateFormatter.string(from: end)).\n"
+            contextText += "- IMPORTANT: Ensure any extracted dates (especially if year is missing) are mapped correctly to match the trip dates if they refer to the same days/months. Do NOT assume 1970 or current year blindly if it contradicts the trip dates.\n"
+        }
+        let dynamicPrompt = "\(baseSystemPrompt)\n\n\(contextText)"
         
         var extractedItems: [ExtractedItineraryItem] = []
         
         if engine == "Cloud (OpenAI)" {
-            extractedItems = try await parseWithOpenAI(text: emailText)
+            extractedItems = try await parseWithOpenAI(text: emailText, systemPrompt: dynamicPrompt)
         } else if engine == "Apple Intelligence" {
-            extractedItems = try await parseWithAppleIntelligence(text: emailText)
+            extractedItems = try await parseWithAppleIntelligence(text: emailText, systemPrompt: dynamicPrompt)
         } else {
             #if canImport(MLX)
-            extractedItems = try await parseWithLocalMLX(text: emailText)
+            extractedItems = try await parseWithLocalMLX(text: emailText, systemPrompt: dynamicPrompt)
             #else
             throw ParserError.missingEngine
             #endif
@@ -83,7 +76,7 @@ class ItineraryParserService {
         }
     }
     
-    private func parseWithOpenAI(text: String) async throws -> [ExtractedItineraryItem] {
+    private func parseWithOpenAI(text: String, systemPrompt: String) async throws -> [ExtractedItineraryItem] {
         guard let apiKey = KeychainManager.shared.get(forKey: .openAIApiKey), !apiKey.isEmpty else {
             throw ParserError.invalidAPIKey
         }
@@ -194,12 +187,13 @@ class ItineraryParserService {
         throw ParserError.parsingError("Could not decode content string to data")
     }
     
-    private func parseWithAppleIntelligence(text: String) async throws -> [ExtractedItineraryItem] {
+    private func parseWithAppleIntelligence(text: String, systemPrompt: String) async throws -> [ExtractedItineraryItem] {
         #if canImport(FoundationModels)
         if #available(iOS 18.0, macOS 15.0, macCatalyst 26.0, *) {
             print("[ItineraryParserService] Running Apple Intelligence on-device extraction...")
             let session = LanguageModelSession()
-            let prompt = "\(systemPrompt)\n\nRAW EMAIL TEXT:\n\(text)"
+            let truncatedText = String(text.prefix(2500))
+            let prompt = "\(systemPrompt)\n\nRAW EMAIL TEXT:\n\(truncatedText)"
             
             do {
                 let response = try await session.respond(to: prompt)
@@ -249,7 +243,7 @@ class ItineraryParserService {
     }
     
     #if canImport(MLX)
-    private func parseWithLocalMLX(text: String) async throws -> [ExtractedItineraryItem] {
+    private func parseWithLocalMLX(text: String, systemPrompt: String) async throws -> [ExtractedItineraryItem] {
         // Finalized MLX Swift Port Structure
         // In a full production application, you would load a model like "mlx-community/Llama-3-8B-Instruct-4bit"
         // using the MLXLLM package from mlx-swift-examples.
@@ -298,7 +292,7 @@ class ItineraryParserService {
         return [dummyItem]
     }
     #else
-    private func parseWithLocalMLX(text: String) async throws -> [ExtractedItineraryItem] {
+    private func parseWithLocalMLX(text: String, systemPrompt: String) async throws -> [ExtractedItineraryItem] {
         throw ParserError.missingEngine
     }
     #endif

@@ -4,12 +4,19 @@ import SwiftData
 struct TripDetailView: View {
     let trip: Trip
     
+    @Environment(\.modelContext) private var modelContext
+    
     @State private var isSyncing = false
     @State private var fetchedEmails: [FetchedEmail] = []
     @State private var syncError: String?
+    @State private var syncProgress: Double = 0
+    @State private var syncTotal: Double = 0
+    @State private var syncStatus: String = ""
     
-    var sortedItems: [ItineraryItem] {
-        trip.items.sorted { $0.startTime < $1.startTime }
+    var groupedItems: [(Date, [ItineraryItem])] {
+        let sorted = trip.items.sorted { $0.startTime < $1.startTime }
+        let grouped = Dictionary(grouping: sorted) { Calendar.current.startOfDay(for: $0.startTime) }
+        return grouped.sorted { $0.key < $1.key }
     }
     
     var hasConnectedEmail: Bool {
@@ -27,8 +34,52 @@ struct TripDetailView: View {
                     )
                 } else {
                     // Itinerary items
-                    ForEach(sortedItems, id: \.id) { item in
-                        TimelineItemView(item: item)
+                    ForEach(groupedItems, id: \.0) { date, items in
+                        VStack(alignment: .leading, spacing: 16) {
+                            Text(date, format: .dateTime.weekday(.wide).month().day())
+                                .font(.headline)
+                                .foregroundColor(.secondary)
+                                .padding(.top, 8)
+                            
+                            ForEach(items, id: \.id) { item in
+                                TimelineItemView(item: item)
+                                    .contextMenu {
+                                        Button(role: .destructive) {
+                                            modelContext.delete(item)
+                                        } label: {
+                                            Label("Delete", systemImage: "trash")
+                                        }
+                                    }
+                            }
+                        }
+                    }
+                    
+                    if isSyncing {
+                        VStack(spacing: 12) {
+                            HStack {
+                                Text("Syncing Emails...")
+                                    .font(.subheadline)
+                                    .fontWeight(.semibold)
+                                Spacer()
+                                Text("\(Int(syncProgress)) / \(Int(syncTotal))")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            
+                            ProgressView(value: syncProgress, total: max(1, syncTotal))
+                                .tint(.blue)
+                            
+                            Text(syncStatus)
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .padding()
+                        .background(Color(.secondarySystemGroupedBackground))
+                        .cornerRadius(12)
+                        .shadow(color: .black.opacity(0.05), radius: 5, x: 0, y: 2)
+                        .padding(.horizontal)
+                        .padding(.vertical, 8)
                     }
                     
                     // Fetched email previews (before they're converted to itinerary items)
@@ -54,7 +105,7 @@ struct TripDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if hasConnectedEmail {
-                ToolbarItem(placement: .primaryAction) {
+                ToolbarItem {
                     Button {
                         syncEmailsForTrip()
                     } label: {
@@ -84,7 +135,7 @@ struct TripDetailView: View {
             Text(email.subject)
                 .font(.subheadline)
                 .fontWeight(.medium)
-                .lineLimit(1)
+                .lineLimit(2)
             
             HStack {
                 Text(email.sender)
@@ -117,11 +168,19 @@ struct TripDetailView: View {
         Task {
             let emails = await EmailFetchService.shared.fetchTravelEmails()
             
+            await MainActor.run {
+                syncTotal = Double(emails.count)
+                syncProgress = 0
+            }
+            
             // Extract itinerary items from fetched emails
             var newItems: [ItineraryItem] = []
-            for email in emails {
+            for (index, email) in emails.enumerated() {
+                await MainActor.run {
+                    syncStatus = "Parsing email \(index + 1) of \(emails.count)..."
+                }
                 do {
-                    let extracted = try await ItineraryParserService.shared.parse(emailText: email.bodyText)
+                    let extracted = try await ItineraryParserService.shared.parse(emailText: email.bodyText, tripStartDate: trip.startDate, tripEndDate: trip.endDate)
                     
                     for item in extracted {
                         // Check if the item's time overlaps with the trip's dates
@@ -135,6 +194,9 @@ struct TripDetailView: View {
                     }
                 } catch {
                     print("Error parsing email \(email.subject): \(error)")
+                }
+                await MainActor.run {
+                    syncProgress += 1
                 }
             }
             

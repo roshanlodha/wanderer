@@ -3,6 +3,7 @@ import SwiftData
 
 struct TimelineItemView: View {
     let item: ItineraryItem
+    @State private var isExpanded = false
     
     var body: some View {
         HStack(alignment: .top, spacing: 16) {
@@ -39,6 +40,7 @@ struct TimelineItemView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text(item.title)
                     .font(.headline)
+                    .fixedSize(horizontal: false, vertical: true)
                 
                 HStack(spacing: 4) {
                     Image(systemName: "mappin.and.ellipse")
@@ -47,6 +49,7 @@ struct TimelineItemView: View {
                     Text(item.locationName)
                         .font(.subheadline)
                         .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 
                 if let ref = item.bookingReference, !ref.isEmpty {
@@ -61,10 +64,28 @@ struct TimelineItemView: View {
                 }
                 
                 if let rawSource = item.rawTextSource, !rawSource.isEmpty {
-                    Text("Source: Email Confirmation")
+                    Button(action: {
+                        withAnimation { isExpanded.toggle() }
+                    }) {
+                        HStack(spacing: 4) {
+                            Text("Source: Email")
+                            Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        }
                         .font(.caption2)
                         .foregroundColor(.secondary)
                         .padding(.top, 2)
+                    }
+                    .buttonStyle(.plain)
+                    
+                    if isExpanded {
+                        Text(rawSource)
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                            .padding(8)
+                            .background(Color.gray.opacity(0.1))
+                            .cornerRadius(8)
+                            .transition(.opacity)
+                    }
                 }
             }
             .padding(.bottom, 24)

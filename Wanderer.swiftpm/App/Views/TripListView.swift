@@ -36,12 +36,12 @@ struct TripListView: View {
             }
         }
         .toolbar {
-            ToolbarItem(placement: .navigation) {
+            ToolbarItem {
                 Button(action: { showSettings = true }) {
                     Label("Settings", systemImage: "gear")
                 }
             }
-            ToolbarItem(placement: .primaryAction) {
+            ToolbarItem {
                 Button(action: { showAddTrip = true }) {
                     Label("Add Trip", systemImage: "plus")
                 }
