@@ -20,6 +20,12 @@ struct ExtractedItineraryItem: Codable {
     let notes: String?
 }
 
+/// Wraps the LLM response: includes a relevance flag so the model can reject non-travel emails
+struct ExtractionResult: Codable {
+    let relevant: Bool
+    let items: [ExtractedItineraryItem]
+}
+
 class ItineraryParserService {
     static let shared = ItineraryParserService()
     
@@ -35,7 +41,10 @@ class ItineraryParserService {
         case missingEngine
     }
     
-    private var baseSystemPrompt: String {
+    // MARK: - Prompt Loading from SystemPrompt.txt
+    
+    /// Full file content of SystemPrompt.txt
+    private var fullPromptFile: String {
         if let url = Bundle.main.url(forResource: "SystemPrompt", withExtension: "txt"),
            let content = try? String(contentsOf: url, encoding: .utf8) {
             return content
@@ -43,34 +52,91 @@ class ItineraryParserService {
         return "You are an expert travel assistant tasked with extracting chronological itinerary items from raw email text."
     }
     
-    func parse(emailText: String, tripStartDate: Date? = nil, tripEndDate: Date? = nil) async throws -> [ItineraryItem] {
-        let engine = UserDefaults.standard.string(forKey: "extractionEngine") ?? "Cloud (OpenAI)"
-        
+    /// The main system prompt (everything before [CONDENSED_PROMPT])
+    private var baseSystemPrompt: String {
+        let full = fullPromptFile
+        if let range = full.range(of: "\n---\n[CONDENSED_PROMPT]") {
+            return String(full[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return full
+    }
+    
+    /// The condensed prompt for Apple Intelligence (between [CONDENSED_PROMPT] and [CONTEXT_TEMPLATE])
+    private var condensedSystemPrompt: String {
+        let full = fullPromptFile
+        guard let startRange = full.range(of: "[CONDENSED_PROMPT]\n") else {
+            return "Extract travel items from email text as a JSON object. Output ONLY valid JSON, no markdown."
+        }
+        let afterStart = full[startRange.upperBound...]
+        if let endRange = afterStart.range(of: "\n[CONTEXT_TEMPLATE]") {
+            return String(afterStart[..<endRange.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return String(afterStart).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    
+    /// The context template from the file (after [CONTEXT_TEMPLATE])
+    private var contextTemplate: String {
+        let full = fullPromptFile
+        guard let startRange = full.range(of: "[CONTEXT_TEMPLATE]\n") else {
+            return "CONTEXT INFO:\n- The current date is {CURRENT_DATE}."
+        }
+        return String(full[startRange.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    
+    /// Builds the dynamic context string by filling in the template placeholders
+    private func buildContext(tripStartDate: Date?, tripEndDate: Date?) -> String {
         let dateFormatter = ISO8601DateFormatter()
         dateFormatter.formatOptions = [.withYear, .withMonth, .withDay, .withDashSeparatorInDate]
-        var contextText = "CONTEXT INFO:\n- The current date is \(dateFormatter.string(from: Date())).\n"
+        
+        var context = contextTemplate
+            .replacingOccurrences(of: "{CURRENT_DATE}", with: dateFormatter.string(from: Date()))
+        
         if let start = tripStartDate, let end = tripEndDate {
-            contextText += "- The user's trip is scheduled from \(dateFormatter.string(from: start)) to \(dateFormatter.string(from: end)).\n"
-            contextText += "- IMPORTANT: Ensure any extracted dates (especially if year is missing) are mapped correctly to match the trip dates if they refer to the same days/months. Do NOT assume 1970 or current year blindly if it contradicts the trip dates.\n"
+            context = context
+                .replacingOccurrences(of: "{TRIP_START}", with: dateFormatter.string(from: start))
+                .replacingOccurrences(of: "{TRIP_END}", with: dateFormatter.string(from: end))
+        } else {
+            // Remove trip-specific lines if no trip dates
+            context = context
+                .components(separatedBy: "\n")
+                .filter { !$0.contains("{TRIP_START}") && !$0.contains("{TRIP_END}") }
+                .joined(separator: "\n")
         }
+        
+        return context
+    }
+    
+    // MARK: - Public API
+    
+    /// Parse a single email. Returns (isRelevant, items).
+    /// When the LLM determines the email is not travel-relevant, isRelevant is false and items is empty.
+    func parse(emailText: String, tripStartDate: Date? = nil, tripEndDate: Date? = nil) async throws -> (relevant: Bool, items: [ItineraryItem]) {
+        let engine = UserDefaults.standard.string(forKey: "extractionEngine") ?? "Cloud (OpenAI)"
+        
+        let contextText = buildContext(tripStartDate: tripStartDate, tripEndDate: tripEndDate)
         let dynamicPrompt = "\(baseSystemPrompt)\n\n\(contextText)"
         
-        var extractedItems: [ExtractedItineraryItem] = []
+        var result: ExtractionResult
         
         if engine == "Cloud (OpenAI)" {
-            extractedItems = try await parseWithOpenAI(text: emailText, systemPrompt: dynamicPrompt)
+            result = try await parseWithOpenAI(text: emailText, systemPrompt: dynamicPrompt)
         } else if engine == "Apple Intelligence" {
-            extractedItems = try await parseWithAppleIntelligence(text: emailText, systemPrompt: dynamicPrompt)
+            result = try await parseWithAppleIntelligence(text: emailText, systemPrompt: dynamicPrompt)
         } else {
             #if canImport(MLX)
-            extractedItems = try await parseWithLocalMLX(text: emailText, systemPrompt: dynamicPrompt)
+            result = try await parseWithLocalMLX(text: emailText, systemPrompt: dynamicPrompt)
             #else
             throw ParserError.missingEngine
             #endif
         }
         
+        // If the LLM rejected the email, return early
+        guard result.relevant else {
+            return (relevant: false, items: [])
+        }
+        
         // Map to SwiftData objects (without context or trip initially)
-        return extractedItems.map { item in
+        let items = result.items.map { item in
             ItineraryItem(
                 title: item.title,
                 startTime: item.startTime,
@@ -83,9 +149,13 @@ class ItineraryParserService {
                 travelMode: item.travelMode
             )
         }
+        
+        return (relevant: true, items: items)
     }
     
-    private func parseWithOpenAI(text: String, systemPrompt: String) async throws -> [ExtractedItineraryItem] {
+    // MARK: - OpenAI
+    
+    private func parseWithOpenAI(text: String, systemPrompt: String) async throws -> ExtractionResult {
         guard let apiKey = KeychainManager.shared.get(forKey: .openAIApiKey), !apiKey.isEmpty else {
             throw ParserError.invalidAPIKey
         }
@@ -104,6 +174,7 @@ class ItineraryParserService {
                 "schema": [
                     "type": "object",
                     "properties": [
+                        "relevant": ["type": "boolean", "description": "Whether this email contains actionable travel itinerary data"],
                         "items": [
                             "type": "array",
                             "items": [
@@ -126,7 +197,7 @@ class ItineraryParserService {
                             ]
                         ]
                     ],
-                    "required": ["items"],
+                    "required": ["relevant", "items"],
                     "additionalProperties": false
                 ]
             ]
@@ -169,10 +240,6 @@ class ItineraryParserService {
             throw ParserError.parsingError("No content in response")
         }
         
-        struct ExtractionResult: Codable {
-            let items: [ExtractedItineraryItem]
-        }
-        
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .custom { decoder in
             let container = try decoder.singleValueContainer()
@@ -204,7 +271,7 @@ class ItineraryParserService {
         
         if let contentData = contentString.data(using: .utf8) {
             let result = try decoder.decode(ExtractionResult.self, from: contentData)
-            return result.items
+            return result
         }
         
         throw ParserError.parsingError("Could not decode content string to data")
@@ -223,16 +290,9 @@ class ItineraryParserService {
         return cleaned
     }
     
-    /// A much shorter system prompt for Apple Intelligence to save context tokens
-    private var condensedSystemPrompt: String {
-        """
-        Extract travel items from email text as a JSON array. Output ONLY valid JSON, no markdown.
-        Schema: [{"title":"String","startTime":"ISO8601","endTime":"ISO8601 or null","locationName":"String","provider":"String or null","bookingReference":"String or null","travelMode":"Flight|Hotel|Bus|Train|Activity","notes":"String or null"}]
-        Rules: Use local time. Split layovers into separate legs. Hotel defaults: check-in 15:00, check-out 11:00. If no travel data found, return [].
-        """
-    }
+    // MARK: - Apple Intelligence
     
-    private func parseWithAppleIntelligence(text: String, systemPrompt: String) async throws -> [ExtractedItineraryItem] {
+    private func parseWithAppleIntelligence(text: String, systemPrompt: String) async throws -> ExtractionResult {
         #if canImport(FoundationModels)
         if #available(iOS 18.0, macOS 15.0, macCatalyst 26.0, *) {
             print("[ItineraryParserService] Running Apple Intelligence on-device extraction...")
@@ -249,10 +309,6 @@ class ItineraryParserService {
             // Aggressively strip HTML/URLs and condense whitespace to save tokens
             let cleanedText = stripHTMLAndCondense(text)
             
-            // Use the condensed prompt + only the trip date context (skip verbose system prompt)
-            let dateFormatter = ISO8601DateFormatter()
-            dateFormatter.formatOptions = [.withYear, .withMonth, .withDay, .withDashSeparatorInDate]
-            
             // Extract just the CONTEXT INFO portion from the full systemPrompt
             var contextLine = ""
             if let range = systemPrompt.range(of: "CONTEXT INFO:") {
@@ -265,7 +321,6 @@ class ItineraryParserService {
             }
             
             // Hard cap at 1500 chars to stay well within 4096 token limit
-            // (condensed prompt ~200 tokens, context ~50 tokens, leaves ~3800 for email + response)
             let maxEmailChars = 1500
             let truncatedText = String(cleanedText.prefix(maxEmailChars))
             
@@ -277,12 +332,11 @@ class ItineraryParserService {
                 let response = try await session.respond(to: prompt)
                 let contentString = response.content
                 
-                // Look for JSON array or object
-                guard let start = contentString.firstIndex(of: "[") ?? contentString.firstIndex(of: "{"),
-                      let end = contentString.lastIndex(of: "]") ?? contentString.lastIndex(of: "}") else {
-                    // No travel data found — return empty rather than error
+                // Look for JSON object or array
+                guard let start = contentString.firstIndex(of: "{") ?? contentString.firstIndex(of: "["),
+                      let end = contentString.lastIndex(of: "}") ?? contentString.lastIndex(of: "]") else {
                     print("[AppleIntelligence] No JSON found in response, returning empty.")
-                    return []
+                    return ExtractionResult(relevant: false, items: [])
                 }
                 
                 let jsonString = String(contentString[start...end])
@@ -310,27 +364,31 @@ class ItineraryParserService {
                     throw DecodingError.dataCorruptedError(in: container, debugDescription: "Invalid date: \(dateString)")
                 }
                 
-                // Attempt to decode as array
-                if let array = try? decoder.decode([ExtractedItineraryItem].self, from: contentData) {
-                    return array
+                // Try to decode as ExtractionResult (with relevant field)
+                if let result = try? decoder.decode(ExtractionResult.self, from: contentData) {
+                    return result
                 }
                 
-                // Fallback for object with items key
-                struct ObjectResult: Codable { let items: [ExtractedItineraryItem] }
-                if let obj = try? decoder.decode(ObjectResult.self, from: contentData) {
-                    return obj.items
+                // Fallback: decode as array (legacy format — assume relevant)
+                if let array = try? decoder.decode([ExtractedItineraryItem].self, from: contentData) {
+                    return ExtractionResult(relevant: !array.isEmpty, items: array)
+                }
+                
+                // Fallback: object with items key but no relevant field
+                struct LegacyResult: Codable { let items: [ExtractedItineraryItem] }
+                if let obj = try? decoder.decode(LegacyResult.self, from: contentData) {
+                    return ExtractionResult(relevant: !obj.items.isEmpty, items: obj.items)
                 }
                 
                 throw ParserError.parsingError("Failed to parse Apple Intelligence JSON structure.")
             } catch let error as ParserError {
                 throw error
             } catch {
-                // If context window exceeded, reset session and return empty
                 let errorDesc = error.localizedDescription
                 if errorDesc.contains("context") || errorDesc.contains("token") || errorDesc.contains("exceeded") {
                     print("[AppleIntelligence] Context window exceeded, resetting session.")
                     appleIntelligenceSession = nil
-                    return []
+                    return ExtractionResult(relevant: false, items: [])
                 }
                 throw ParserError.parsingError("Apple Intelligence Error: \(errorDesc)")
             }
@@ -342,38 +400,16 @@ class ItineraryParserService {
         #endif
     }
     
+    // MARK: - MLX
+    
     #if canImport(MLX)
-    private func parseWithLocalMLX(text: String, systemPrompt: String) async throws -> [ExtractedItineraryItem] {
+    private func parseWithLocalMLX(text: String, systemPrompt: String) async throws -> ExtractionResult {
         // Finalized MLX Swift Port Structure
-        // In a full production application, you would load a model like "mlx-community/Llama-3-8B-Instruct-4bit"
-        // using the MLXLLM package from mlx-swift-examples.
         print("[ItineraryParserService] Initializing MLX Swift Engine...")
         
-        // 1. Initialize MLX runtime
         MLX.GPU.set(cacheLimit: 1024 * 1024 * 1024) // 1GB cache limit
         
         let prompt = "\(systemPrompt)\n\nRAW EMAIL TEXT:\n\(text)"
-        
-        /* 
-         // Boilerplate for loading the actual model:
-         let modelConfiguration = ModelConfiguration.llama3_8B_Instruct_4bit
-         let (model, tokenizer) = try await load(configuration: modelConfiguration)
-         
-         let promptTokens = tokenizer.encode(text: prompt)
-         var input = MLXArray(promptTokens)
-         
-         // Generate output loop
-         var outputTokens = [Int]()
-         for _ in 0..<1024 { // max tokens
-             let logits = model(input)
-             let nextToken = argmax(logits, axis: -1).item(Int.self)
-             outputTokens.append(nextToken)
-             if nextToken == tokenizer.eosTokenId { break }
-             input = MLXArray([nextToken])
-         }
-         
-         let generatedJSON = tokenizer.decode(tokens: outputTokens)
-         */
         
         // Simulating the MLX computation time and generating a robust fallback for the demo
         try await Task.sleep(nanoseconds: 2_000_000_000)
@@ -391,10 +427,10 @@ class ItineraryParserService {
             notes: nil
         )
         
-        return [dummyItem]
+        return ExtractionResult(relevant: true, items: [dummyItem])
     }
     #else
-    private func parseWithLocalMLX(text: String, systemPrompt: String) async throws -> [ExtractedItineraryItem] {
+    private func parseWithLocalMLX(text: String, systemPrompt: String) async throws -> ExtractionResult {
         throw ParserError.missingEngine
     }
     #endif

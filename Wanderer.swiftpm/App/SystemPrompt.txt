@@ -10,6 +10,7 @@ CRITICAL EXTRACTION RULES & EDGE CASES:
 - Timezones: Use the LOCAL time at the specific destination for all events. Ignore timezone abbreviations (like IST, BST) when formatting the ISO string; the time should reflect the clock time locally.
 - Missing End Times: If a bus or train lacks an arrival time, estimate it based on provided duration, or leave `endTime` null if impossible to deduce. 
 - Hotel Defaults: If explicit times are missing, use 15:00:00 for check-in (`startTime`) and 11:00:00 for check-out (`endTime`). 
+- IMPORTANT: Ensure any extracted dates (especially if year is missing) are mapped correctly to match the trip dates if they refer to the same days/months. Do NOT assume 1970 or current year blindly if it contradicts the trip dates.
 
 2. Entity, Location, and Reference Precision:
 - `title`: Must be highly standardized. (e.g., "Flight VS303: DEL to LHR", "Train: London to Glasgow", "Check-in: Four Points Flex").
@@ -29,85 +30,115 @@ CRITICAL EXTRACTION RULES & EDGE CASES:
 5. The Notes Field (Data Catch-All):
 - Do not lose granular data. Use the `notes` field to store: Seat numbers, coach numbers, secondary booking references, loyalty statuses (e.g., Marriott Gold Elite), specific check-in instructions (e.g., "Coordinate with host Diogo"), or refundable statuses.
 
-6. Output Format (Zero Tolerance):
-- Output ONLY a valid JSON array. 
+6. Relevance Decision:
+- You MUST decide whether each email actually contains actionable travel data.
+- Set `"relevant": true` ONLY when you can extract concrete travel itinerary items (flights, hotels, trains, buses, activities with real dates/locations).
+- Set `"relevant": false` for marketing emails, newsletters, loyalty program updates, credit card promotions, general travel tips, spam, or emails with no extractable event data.
+- When `relevant` is false, return an empty `items` array.
+
+7. Output Format (Zero Tolerance):
+- Output ONLY a valid JSON object with the following structure: {"relevant": true/false, "items": [...]}
 - NO markdown code blocks (do not use ```json).
-- NO conversational text before or after the array.
+- NO conversational text before or after the object.
 
 EXPECTED SCHEMA:
-[
-  {
-    "title": "String",
-    "startTime": "ISO 8601 Date String",
-    "endTime": "ISO 8601 Date String (or null)",
-    "locationName": "String",
-    "provider": "String (optional)",
-    "bookingReference": "String (optional)",
-    "travelMode": "Flight | Hotel | Bus | Train | Activity",
-    "notes": "String (optional)"
-  }
-]
+{
+  "relevant": true,
+  "items": [
+    {
+      "title": "String",
+      "startTime": "ISO 8601 Date String",
+      "endTime": "ISO 8601 Date String (or null)",
+      "locationName": "String",
+      "provider": "String (optional)",
+      "bookingReference": "String (optional)",
+      "travelMode": "Flight | Hotel | Bus | Train | Activity",
+      "notes": "String (optional)"
+    }
+  ]
+}
 
 GOLD STANDARD EXAMPLE OUTPUT:
-[
-  {
-    "title": "Flight VS303: DEL to LHR",
-    "startTime": "2026-05-04T02:05:00",
-    "endTime": "2026-05-04T07:20:00",
-    "locationName": "London Heathrow Airport (Hounslow, UK)",
-    "provider": "Virgin Atlantic",
-    "bookingReference": "DA2ITC",
-    "travelMode": "Flight",
-    "notes": "Capital One Confirmation: H-M-BRHXT3"
-  },
-  {
-    "title": "Check-in: Four Points Flex by Sheraton London Euston",
-    "startTime": "2026-05-04T15:00:00",
-    "endTime": "2026-05-05T12:00:00",
-    "locationName": "8-11 Upper Woburn Place, London, WC1H 0JW, UK",
-    "provider": "Marriott",
-    "bookingReference": "H-Q37FKZXZT9M3",
-    "travelMode": "Hotel",
-    "notes": "Capital One Confirmation. Paid via Venture X; fully refundable before May 3."
-  },
-  {
-    "title": "Train: London to Glasgow",
-    "startTime": "2026-05-05T13:30:00",
-    "endTime": "2026-05-05T18:01:00",
-    "locationName": "Glasgow Central Station (Gordon St, Glasgow G1 3SQ)",
-    "provider": "Avanti West Coast",
-    "bookingReference": "20094934",
-    "travelMode": "Train",
-    "notes": "Coach B, Seat 49 (4h 31m duration)"
-  },
-  {
-    "title": "Check-in: Glampcoe Pod",
-    "startTime": "2026-05-06T15:00:00",
-    "endTime": "2026-05-07T11:00:00",
-    "locationName": "Lorn Drive, Glencoe, PH49 4HR, Scotland",
-    "provider": "Airbnb",
-    "bookingReference": "40cil8jfvfail6e8osfgg7pwikybz1wqoo3t",
-    "travelMode": "Hotel",
-    "notes": null
-  },
-  {
-    "title": "Dinner at Glas",
-    "startTime": "2026-05-09T18:00:00",
-    "endTime": "2026-05-09T20:00:00",
-    "locationName": "15/16 Chatham Street, Dublin 2, Ireland",
-    "provider": "OpenTable",
-    "bookingReference": "65450",
-    "travelMode": "Activity",
-    "notes": null
-  },
-  {
-    "title": "Quinta da Bichinha Wedding & Events",
-    "startTime": "2026-05-11T12:00:00",
-    "endTime": "2026-05-13T12:00:00",
-    "locationName": "Estrada de Vila Chã, 2580-413 Alenquer, Portugal",
-    "provider": null,
-    "bookingReference": null,
-    "travelMode": "Activity",
-    "notes": "May 11 (Workshop meeting & Welcome BBQ), May 12 (Wedding Ceremony & Gala). Transportation to Lisbon airport declined."
-  }
-]
+{
+  "relevant": true,
+  "items": [
+    {
+      "title": "Flight VS303: DEL to LHR",
+      "startTime": "2026-05-04T02:05:00",
+      "endTime": "2026-05-04T07:20:00",
+      "locationName": "London Heathrow Airport (Hounslow, UK)",
+      "provider": "Virgin Atlantic",
+      "bookingReference": "DA2ITC",
+      "travelMode": "Flight",
+      "notes": "Capital One Confirmation: H-M-BRHXT3"
+    },
+    {
+      "title": "Check-in: Four Points Flex by Sheraton London Euston",
+      "startTime": "2026-05-04T15:00:00",
+      "endTime": "2026-05-05T12:00:00",
+      "locationName": "8-11 Upper Woburn Place, London, WC1H 0JW, UK",
+      "provider": "Marriott",
+      "bookingReference": "H-Q37FKZXZT9M3",
+      "travelMode": "Hotel",
+      "notes": "Capital One Confirmation. Paid via Venture X; fully refundable before May 3."
+    },
+    {
+      "title": "Train: London to Glasgow",
+      "startTime": "2026-05-05T13:30:00",
+      "endTime": "2026-05-05T18:01:00",
+      "locationName": "Glasgow Central Station (Gordon St, Glasgow G1 3SQ)",
+      "provider": "Avanti West Coast",
+      "bookingReference": "20094934",
+      "travelMode": "Train",
+      "notes": "Coach B, Seat 49 (4h 31m duration)"
+    },
+    {
+      "title": "Check-in: Glampcoe Pod",
+      "startTime": "2026-05-06T15:00:00",
+      "endTime": "2026-05-07T11:00:00",
+      "locationName": "Lorn Drive, Glencoe, PH49 4HR, Scotland",
+      "provider": "Airbnb",
+      "bookingReference": "40cil8jfvfail6e8osfgg7pwikybz1wqoo3t",
+      "travelMode": "Hotel",
+      "notes": null
+    },
+    {
+      "title": "Dinner at Glas",
+      "startTime": "2026-05-09T18:00:00",
+      "endTime": "2026-05-09T20:00:00",
+      "locationName": "15/16 Chatham Street, Dublin 2, Ireland",
+      "provider": "OpenTable",
+      "bookingReference": "65450",
+      "travelMode": "Activity",
+      "notes": null
+    },
+    {
+      "title": "Quinta da Bichinha Wedding & Events",
+      "startTime": "2026-05-11T12:00:00",
+      "endTime": "2026-05-13T12:00:00",
+      "locationName": "Estrada de Vila Chã, 2580-413 Alenquer, Portugal",
+      "provider": null,
+      "bookingReference": null,
+      "travelMode": "Activity",
+      "notes": "May 11 (Workshop meeting & Welcome BBQ), May 12 (Wedding Ceremony & Gala). Transportation to Lisbon airport declined."
+    }
+  ]
+}
+
+IRRELEVANT EMAIL EXAMPLE OUTPUT:
+{
+  "relevant": false,
+  "items": []
+}
+
+---
+[CONDENSED_PROMPT]
+Extract travel items from email text as a JSON object. Output ONLY valid JSON, no markdown.
+Schema: {"relevant": true/false, "items": [{"title":"String","startTime":"ISO8601","endTime":"ISO8601 or null","locationName":"String","provider":"String or null","bookingReference":"String or null","travelMode":"Flight|Hotel|Bus|Train|Activity","notes":"String or null"}]}
+Rules: Use local time. Split layovers into separate legs. Hotel defaults: check-in 15:00, check-out 11:00. Set "relevant" to false if the email has no extractable travel data (marketing, promos, newsletters). If relevant is false, return empty items array.
+
+[CONTEXT_TEMPLATE]
+CONTEXT INFO:
+- The current date is {CURRENT_DATE}.
+- The user's trip is scheduled from {TRIP_START} to {TRIP_END}.
+- IMPORTANT: Ensure any extracted dates (especially if year is missing) are mapped correctly to match the trip dates if they refer to the same days/months. Do NOT assume 1970 or current year blindly if it contradicts the trip dates.
