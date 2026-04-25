@@ -813,6 +813,7 @@ class ItineraryParserService {
             title: "MLX Processed Flight",
             startTime: baseDate.addingTimeInterval(3600 * 12),
             endTime: baseDate.addingTimeInterval(3600 * 14),
+            timeZoneGMTOffset: "+0",
             locationName: "Local LLM Port",
             provider: "MLX Local",
             bookingReference: "MLX-SWIFT-1",
