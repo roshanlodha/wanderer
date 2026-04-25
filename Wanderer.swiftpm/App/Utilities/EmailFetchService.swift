@@ -8,13 +8,29 @@ struct FetchedEmail: Identifiable {
     let sender: String
     let date: Date
     let bodyText: String
+
+    init(id: String, subject: String, sender: String, date: Date, bodyText: String) {
+        self.id = id
+        self.subject = subject
+        self.sender = sender
+        self.date = date
+        self.bodyText = bodyText
+    }
+
+    init(source: EmailSource) {
+        self.id = source.externalID
+        self.subject = source.subject
+        self.sender = source.sender
+        self.date = source.dateReceived
+        self.bodyText = source.bodyText
+    }
     
     /// Status of extraction for this email
     enum ExtractionStatus: Equatable {
         case pending       // Not yet extracted
         case extracting    // Currently being processed
-        case extracted(Int) // Successfully extracted N items
-        case irrelevant    // LLM determined not travel-related
+        case extracted(Int, String?) // Successfully extracted N items
+        case irrelevant(String)    // LLM determined not travel-related
         case failed(String) // Extraction failed with error
     }
 }
@@ -178,9 +194,7 @@ class EmailFetchService {
             let bodyText = stripHTML(from: msg.body.content)
             guard !bodyText.isEmpty else { return nil }
             
-            let dateFormatter = ISO8601DateFormatter()
-            dateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            let date = dateFormatter.date(from: msg.receivedDateTime) ?? Date()
+            let date = parseMicrosoftDate(msg.receivedDateTime) ?? Date()
             
             return FetchedEmail(
                 id: msg.id,
@@ -246,15 +260,7 @@ class EmailFetchService {
         let from = headers.first(where: { $0.name.lowercased() == "from" })?.value ?? "(Unknown)"
         let dateStr = headers.first(where: { $0.name.lowercased() == "date" })?.value
         
-        let date: Date
-        if let dateStr = dateStr {
-            let formatter = DateFormatter()
-            formatter.locale = Locale(identifier: "en_US_POSIX")
-            formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss Z"
-            date = formatter.date(from: dateStr) ?? Date()
-        } else {
-            date = Date()
-        }
+        let date = parseGmailDateHeader(dateStr, fallbackInternalDate: message.internalDate) ?? Date()
         
         let bodyText = extractGmailBody(from: message.payload)
         guard !bodyText.isEmpty else { return nil }
@@ -309,6 +315,60 @@ class EmailFetchService {
         guard let data = Data(base64Encoded: base64) else { return nil }
         return String(data: data, encoding: .utf8)
     }
+
+    private func parseMicrosoftDate(_ value: String) -> Date? {
+        let formatters: [ISO8601DateFormatter] = [
+            {
+                let formatter = ISO8601DateFormatter()
+                formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                return formatter
+            }(),
+            {
+                let formatter = ISO8601DateFormatter()
+                formatter.formatOptions = [.withInternetDateTime]
+                return formatter
+            }()
+        ]
+
+        for formatter in formatters {
+            if let date = formatter.date(from: value) {
+                return date
+            }
+        }
+
+        return nil
+    }
+
+    private func parseGmailDateHeader(_ value: String?, fallbackInternalDate: String?) -> Date? {
+        if let value {
+            let sanitized = value
+                .replacingOccurrences(of: "\\s*\\([^\\)]*\\)", with: "", options: .regularExpression)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
+            let formats = [
+                "EEE, d MMM yyyy HH:mm:ss Z",
+                "EEE, d MMM yyyy HH:mm Z",
+                "d MMM yyyy HH:mm:ss Z",
+                "d MMM yyyy HH:mm Z"
+            ]
+
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+
+            for format in formats {
+                formatter.dateFormat = format
+                if let parsed = formatter.date(from: sanitized) {
+                    return parsed
+                }
+            }
+        }
+
+        if let fallbackInternalDate, let milliseconds = Double(fallbackInternalDate) {
+            return Date(timeIntervalSince1970: milliseconds / 1000)
+        }
+
+        return nil
+    }
 }
 
 // MARK: - Error
@@ -339,6 +399,7 @@ struct GmailMessageRef: Codable {
 
 struct GmailMessage: Codable {
     let id: String
+    let internalDate: String?
     let payload: GmailPayload
 }
 

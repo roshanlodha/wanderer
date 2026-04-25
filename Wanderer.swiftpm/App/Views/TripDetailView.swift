@@ -23,6 +23,7 @@ struct TripDetailView: View {
     @State private var classificationTask: Task<Void, Never>?
     @State private var showTripSettingsSheet = false
     @State private var selectedTab: EmailTab = .itinerary
+    @State private var editingItem: ItineraryItem?
     @AppStorage("classificationMode") private var classificationMode: String = "Smart"
     
     // Manual add form state
@@ -75,6 +76,12 @@ struct TripDetailView: View {
             }
         }
     }
+
+    private enum PersistedEmailCategory: String {
+        case itinerary
+        case important
+        case other
+    }
     
     var body: some View {
         ScrollView {
@@ -116,6 +123,8 @@ struct TripDetailView: View {
                 
                 // Green plus — manual add
                 Button {
+                    editingItem = nil
+                    resetManualForm()
                     showAddItemSheet = true
                 } label: {
                     Image(systemName: "plus.circle.fill")
@@ -150,6 +159,7 @@ struct TripDetailView: View {
         .sheet(isPresented: $showTripSettingsSheet) {
             tripSettingsSheet
         }
+        .onAppear(perform: loadPersistedEmails)
     }
     
     // MARK: - Itinerary Section
@@ -165,18 +175,34 @@ struct TripDetailView: View {
                 ForEach(items, id: \.id) { item in
                     HStack(alignment: .top) {
                         TimelineItemView(item: item)
-                        
-                        Button {
-                            deleteItem(item)
-                        } label: {
-                            Image(systemName: "trash.circle.fill")
-                                .font(.title3)
-                                .foregroundColor(.red.opacity(0.6))
+
+                        VStack(spacing: 10) {
+                            Button {
+                                prepareToEdit(item)
+                            } label: {
+                                Image(systemName: "pencil.circle.fill")
+                                    .font(.title3)
+                                    .foregroundColor(.blue.opacity(0.75))
+                            }
+                            .buttonStyle(.plain)
+
+                            Button {
+                                deleteItem(item)
+                            } label: {
+                                Image(systemName: "trash.circle.fill")
+                                    .font(.title3)
+                                    .foregroundColor(.red.opacity(0.6))
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
                         .padding(.top, 8)
                     }
                     .contextMenu {
+                        Button {
+                            prepareToEdit(item)
+                        } label: {
+                            Label("Edit", systemImage: "pencil")
+                        }
                         Button(role: .destructive) {
                             deleteItem(item)
                         } label: {
@@ -203,10 +229,21 @@ struct TripDetailView: View {
                         .foregroundColor(.secondary)
                 }
             }
+            
+            if syncTotal > 0 {
+                ProgressView(value: syncProgress, total: max(1, syncTotal))
+                    .tint(isExtracting ? .green : .blue)
+            } else {
+                ProgressView()
+            }
+            
+            HStack(alignment: .center, spacing: 12) {
+                Text(syncStatus)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
-            if isFetchingEmails && classificationMode == "Smart" {
-                HStack {
-                    Spacer()
+                if isFetchingEmails && classificationMode == "Smart" {
                     Button(role: .destructive) {
                         stopClassification()
                     } label: {
@@ -216,10 +253,7 @@ struct TripDetailView: View {
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
-                }
-            } else if isExtracting {
-                HStack {
-                    Spacer()
+                } else if isExtracting {
                     Button(role: .destructive) {
                         stopParsing()
                     } label: {
@@ -231,18 +265,6 @@ struct TripDetailView: View {
                     .controlSize(.small)
                 }
             }
-            
-            if syncTotal > 0 {
-                ProgressView(value: syncProgress, total: max(1, syncTotal))
-                    .tint(isExtracting ? .green : .blue)
-            } else {
-                ProgressView()
-            }
-            
-            Text(syncStatus)
-                .font(.caption2)
-                .foregroundColor(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding()
         .background(Color(.secondarySystemGroupedBackground))
@@ -654,12 +676,12 @@ struct TripDetailView: View {
             Text("Extracting...")
                 .font(.caption2)
                 .foregroundColor(.blue)
-        case .extracted(let count):
-            Text("\(count) item\(count == 1 ? "" : "s") extracted")
+        case .extracted(let count, let detail):
+            Text(detail ?? "\(count) item\(count == 1 ? "" : "s") extracted")
                 .font(.caption2)
                 .foregroundColor(.green)
-        case .irrelevant:
-            Text("Not travel-related")
+        case .irrelevant(let detail):
+            Text(detail)
                 .font(.caption2)
                 .foregroundColor(.orange)
         case .failed(let msg):
@@ -713,12 +735,13 @@ struct TripDetailView: View {
                         .lineLimit(3...6)
                 }
             }
-            .navigationTitle("Add Event")
+            .navigationTitle(editingItem == nil ? "Add Event" : "Edit Event")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button {
                         showAddItemSheet = false
+                        editingItem = nil
                         resetManualForm()
                     } label: {
                         Image(systemName: "xmark.circle.fill")
@@ -726,8 +749,8 @@ struct TripDetailView: View {
                     }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Add") {
-                        addManualItem()
+                    Button(editingItem == nil ? "Add" : "Save") {
+                        saveManualItem()
                     }
                     .disabled(manualTitle.isEmpty || manualLocation.isEmpty)
                     .fontWeight(.semibold)
@@ -799,9 +822,11 @@ struct TripDetailView: View {
         withAnimation {
             itineraryEmails.removeAll { $0.id == email.id }
             importantDocuments.removeAll { $0.id == email.id }
+            otherEmails.removeAll { $0.id == email.id }
             emailStatuses.removeValue(forKey: email.id)
             expandedEmailIds.remove(email.id)
         }
+        persistEmailCollections()
     }
 
     private func moveToItinerary(email: FetchedEmail) {
@@ -815,22 +840,45 @@ struct TripDetailView: View {
             }
             emailStatuses[email.id] = .pending
         }
+        persistEmailCollections()
+    }
+
+    private func appendEmailIfNeeded(_ email: FetchedEmail, to collection: inout [FetchedEmail]) {
+        if !collection.contains(where: { $0.id == email.id }) {
+            collection.append(email)
+            collection.sort { $0.date > $1.date }
+        }
     }
     
-    private func addManualItem() {
-        let item = ItineraryItem(
-            title: manualTitle,
-            startTime: manualStartTime,
-            endTime: manualHasEndTime ? manualEndTime : nil,
-            locationName: manualLocation,
-            bookingReference: manualBookingRef.isEmpty ? nil : manualBookingRef,
-            provider: manualProvider.isEmpty ? nil : manualProvider,
-            notes: manualNotes.isEmpty ? nil : manualNotes,
-            rawTextSource: nil,
-            travelMode: manualTravelMode
-        )
-        trip.items.append(item)
+    private func saveManualItem() {
+        let endTime = manualHasEndTime ? manualEndTime : nil
+
+        if let editingItem {
+            editingItem.title = manualTitle
+            editingItem.startTime = manualStartTime
+            editingItem.endTime = endTime
+            editingItem.locationName = manualLocation
+            editingItem.bookingReference = manualBookingRef.isEmpty ? nil : manualBookingRef
+            editingItem.provider = manualProvider.isEmpty ? nil : manualProvider
+            editingItem.notes = manualNotes.isEmpty ? nil : manualNotes
+            editingItem.travelMode = manualTravelMode
+        } else {
+            let item = ItineraryItem(
+                title: manualTitle,
+                startTime: manualStartTime,
+                endTime: endTime,
+                locationName: manualLocation,
+                bookingReference: manualBookingRef.isEmpty ? nil : manualBookingRef,
+                provider: manualProvider.isEmpty ? nil : manualProvider,
+                notes: manualNotes.isEmpty ? nil : manualNotes,
+                rawTextSource: nil,
+                travelMode: manualTravelMode
+            )
+            trip.items.append(item)
+        }
+
         showAddItemSheet = false
+        editingItem = nil
         resetManualForm()
     }
     
@@ -844,6 +892,133 @@ struct TripDetailView: View {
         manualBookingRef = ""
         manualNotes = ""
         manualTravelMode = .activity
+    }
+
+    private func prepareToEdit(_ item: ItineraryItem) {
+        editingItem = item
+        manualTitle = item.title
+        manualStartTime = item.startTime
+        manualEndTime = item.endTime ?? item.startTime
+        manualHasEndTime = item.endTime != nil
+        manualLocation = item.locationName
+        manualProvider = item.provider ?? ""
+        manualBookingRef = item.bookingReference ?? ""
+        manualNotes = item.notes ?? ""
+        manualTravelMode = item.travelMode
+        showAddItemSheet = true
+    }
+
+    private func loadPersistedEmails() {
+        let visibleSources = trip.emailSources
+            .filter(\.isVisibleInTripEmails)
+            .sorted { $0.dateReceived > $1.dateReceived }
+
+        itineraryEmails = visibleSources
+            .filter { $0.categoryRaw == PersistedEmailCategory.itinerary.rawValue }
+            .map(FetchedEmail.init(source:))
+        importantDocuments = visibleSources
+            .filter { $0.categoryRaw == PersistedEmailCategory.important.rawValue }
+            .map(FetchedEmail.init(source:))
+        otherEmails = visibleSources
+            .filter { $0.categoryRaw == PersistedEmailCategory.other.rawValue }
+            .map(FetchedEmail.init(source:))
+
+        emailStatuses = Dictionary(
+            uniqueKeysWithValues: visibleSources.map { source in
+                (source.externalID, extractionStatus(from: source))
+            }
+        )
+    }
+
+    private func extractionStatus(from source: EmailSource) -> FetchedEmail.ExtractionStatus {
+        switch source.extractionStatusRaw {
+        case "extracting":
+            return .extracting
+        case "extracted":
+            return .extracted(source.extractedItemCount, source.extractionMessage)
+        case "irrelevant":
+            return .irrelevant(source.extractionMessage ?? "Not trip-related")
+        case "failed":
+            return .failed(source.extractionMessage ?? "Unknown error")
+        default:
+            return .pending
+        }
+    }
+
+    private func persistEmailCollections() {
+        for source in trip.emailSources {
+            source.isVisibleInTripEmails = false
+        }
+
+        for email in itineraryEmails {
+            let status = emailStatuses[email.id] ?? .pending
+            let source = upsertEmailSource(for: email, category: .itinerary, status: status)
+            source.isVisibleInTripEmails = true
+        }
+
+        for email in importantDocuments {
+            let status = emailStatuses[email.id] ?? .pending
+            let source = upsertEmailSource(for: email, category: .important, status: status)
+            source.isVisibleInTripEmails = true
+        }
+
+        for email in otherEmails {
+            let fallbackStatus: FetchedEmail.ExtractionStatus = emailStatuses[email.id] ?? .irrelevant("Not trip-related or manually moved")
+            let source = upsertEmailSource(for: email, category: .other, status: fallbackStatus)
+            source.isVisibleInTripEmails = true
+        }
+    }
+
+    @discardableResult
+    private func upsertEmailSource(
+        for email: FetchedEmail,
+        category: PersistedEmailCategory,
+        status: FetchedEmail.ExtractionStatus
+    ) -> EmailSource {
+        let source = trip.emailSources.first(where: { $0.externalID == email.id }) ?? {
+            let source = EmailSource(
+                externalID: email.id,
+                sender: email.sender,
+                subject: email.subject,
+                dateReceived: email.date,
+                snippet: String(email.bodyText.prefix(280)),
+                bodyText: email.bodyText
+            )
+            trip.emailSources.append(source)
+            return source
+        }()
+
+        source.sender = email.sender
+        source.subject = email.subject
+        source.dateReceived = email.date
+        source.snippet = String(email.bodyText.prefix(280))
+        source.bodyText = email.bodyText
+        source.categoryRaw = category.rawValue
+
+        switch status {
+        case .pending:
+            source.extractionStatusRaw = "pending"
+            source.extractionMessage = nil
+            source.extractedItemCount = 0
+        case .extracting:
+            source.extractionStatusRaw = "extracting"
+            source.extractionMessage = "Extracting..."
+            source.extractedItemCount = 0
+        case .extracted(let count, let message):
+            source.extractionStatusRaw = "extracted"
+            source.extractionMessage = message
+            source.extractedItemCount = count
+        case .irrelevant(let message):
+            source.extractionStatusRaw = "irrelevant"
+            source.extractionMessage = message
+            source.extractedItemCount = 0
+        case .failed(let message):
+            source.extractionStatusRaw = "failed"
+            source.extractionMessage = message
+            source.extractedItemCount = 0
+        }
+
+        return source
     }
     
     // MARK: - Date Filtering Helper
@@ -900,6 +1075,35 @@ struct TripDetailView: View {
         return (kept, removedCount)
     }
 
+    private func finalStatus(
+        for result: (relevant: Bool, items: [ItineraryItem]),
+        filteredItems: [ItineraryItem],
+        addedCount: Int,
+        duplicateCount: Int
+    ) -> FetchedEmail.ExtractionStatus {
+        if !result.relevant {
+            return .irrelevant("Not trip-related for this trip")
+        }
+
+        if result.items.isEmpty {
+            return .extracted(0, "No itinerary details found")
+        }
+
+        if filteredItems.isEmpty {
+            return .extracted(0, "This booking is outside the trip window")
+        }
+
+        if addedCount == 0 && duplicateCount > 0 {
+            return .extracted(0, "Already in itinerary")
+        }
+
+        if addedCount > 0 && duplicateCount > 0 {
+            return .extracted(addedCount, "\(addedCount) item\(addedCount == 1 ? "" : "s") extracted, \(duplicateCount) duplicate\(duplicateCount == 1 ? "" : "s") skipped")
+        }
+
+        return .extracted(addedCount, nil)
+    }
+
     // MARK: - Phase 1: Fetch Emails (no extraction)
     
     private func fetchEmails() {
@@ -928,6 +1132,7 @@ struct TripDetailView: View {
                     for email in itinerary {
                         emailStatuses[email.id] = .pending
                     }
+                    persistEmailCollections()
 
                     if emails.isEmpty {
                         syncError = "No travel-related emails found. Try connecting an email account in Settings or check that you have travel confirmation emails."
@@ -998,6 +1203,7 @@ struct TripDetailView: View {
                 for email in itinerary {
                     emailStatuses[email.id] = .pending
                 }
+                persistEmailCollections()
                 isFetchingEmails = false
                 classificationTask = nil
                 
@@ -1067,6 +1273,7 @@ struct TripDetailView: View {
                 await MainActor.run {
                     syncStatus = "Extracting \(index + 1) of \(emails.count): \(email.subject.prefix(30))..."
                     emailStatuses[email.id] = .extracting
+                    persistEmailCollections()
                 }
                 
                 do {
@@ -1083,27 +1290,37 @@ struct TripDetailView: View {
                     
                     await MainActor.run {
                         if !result.relevant {
-                            emailStatuses[email.id] = .irrelevant
+                            emailStatuses[email.id] = .irrelevant("Not trip-related for this trip")
                             totalRejected += 1
                         } else {
                             let filtered = filterItemsForTrip(result.items)
                             var addedForEmail = 0
-                            
+                            var duplicatesForEmail = 0
+                            let source = upsertEmailSource(for: email, category: .itinerary, status: .extracting)
+
                             for item in filtered {
                                 // Duplicate detection
                                 if ItineraryParserService.shared.isDuplicate(item, existingItems: trip.items) {
                                     totalDuplicates += 1
+                                    duplicatesForEmail += 1
                                     print("[Extraction] Skipped duplicate: \(item.title)")
                                 } else {
+                                    item.emailSource = source
                                     trip.items.append(item)
                                     addedForEmail += 1
                                     totalAdded += 1
                                 }
                             }
-                            
-                            emailStatuses[email.id] = .extracted(addedForEmail)
+
+                            emailStatuses[email.id] = finalStatus(
+                                for: result,
+                                filteredItems: filtered,
+                                addedCount: addedForEmail,
+                                duplicateCount: duplicatesForEmail
+                            )
                         }
                         syncProgress += 1
+                        persistEmailCollections()
                     }
                 } catch is CancellationError {
                     wasCancelled = true
@@ -1114,6 +1331,7 @@ struct TripDetailView: View {
                     await MainActor.run {
                         emailStatuses[email.id] = .failed(error.localizedDescription)
                         syncProgress += 1
+                        persistEmailCollections()
                     }
                 }
                 
@@ -1125,15 +1343,20 @@ struct TripDetailView: View {
             
             // Auto-remove irrelevant emails from the list
             await MainActor.run {
-                let irrelevantIds = emailStatuses.filter { $0.value == .irrelevant }.map { $0.key }
-                otherEmails.append(contentsOf: itineraryEmails.filter { irrelevantIds.contains($0.id) })
-                itineraryEmails.removeAll { irrelevantIds.contains($0.id) }
-                for id in irrelevantIds {
-                    emailStatuses.removeValue(forKey: id)
+                let irrelevantIds = emailStatuses.compactMap { id, status -> String? in
+                    if case .irrelevant = status {
+                        return id
+                    }
+                    return nil
                 }
+                for email in itineraryEmails where irrelevantIds.contains(email.id) {
+                    appendEmailIfNeeded(email, to: &otherEmails)
+                }
+                itineraryEmails.removeAll { irrelevantIds.contains($0.id) }
                 
                 isExtracting = false
                 extractionTask = nil
+                persistEmailCollections()
                 
                 // Build summary
                 var parts: [String] = []
@@ -1170,6 +1393,7 @@ struct TripDetailView: View {
         Task {
             await MainActor.run {
                 emailStatuses[email.id] = .extracting
+                persistEmailCollections()
             }
             
             do {
@@ -1183,34 +1407,46 @@ struct TripDetailView: View {
                     if result.relevant {
                         let filtered = filterItemsForTrip(result.items)
                         var addedCount = 0
-                        
+                        var duplicateCount = 0
+                        let source = upsertEmailSource(for: email, category: .itinerary, status: .extracting)
+
                         for item in filtered {
                             if !ItineraryParserService.shared.isDuplicate(item, existingItems: trip.items) {
+                                item.emailSource = source
                                 trip.items.append(item)
                                 addedCount += 1
+                            } else {
+                                duplicateCount += 1
                             }
                         }
                         
-                        emailStatuses[email.id] = .extracted(addedCount)
+                        emailStatuses[email.id] = finalStatus(
+                            for: result,
+                            filteredItems: filtered,
+                            addedCount: addedCount,
+                            duplicateCount: duplicateCount
+                        )
+                        persistEmailCollections()
                         
-                        if addedCount == 0 && !filtered.isEmpty {
+                        if addedCount == 0 && duplicateCount > 0 {
                             syncError = "Items were already in your itinerary (duplicates skipped)."
                         } else if filtered.isEmpty && !result.items.isEmpty {
                             syncError = "Extracted \(result.items.count) items, but none matched the trip dates."
                         }
                     } else {
-                        emailStatuses[email.id] = .irrelevant
+                        emailStatuses[email.id] = .irrelevant("Not trip-related for this trip")
                         // Auto-remove irrelevant email
                         withAnimation {
                             itineraryEmails.removeAll { $0.id == email.id }
-                            otherEmails.append(email)
-                            emailStatuses.removeValue(forKey: email.id)
+                            appendEmailIfNeeded(email, to: &otherEmails)
                         }
+                        persistEmailCollections()
                     }
                 }
             } catch {
                 await MainActor.run {
                     emailStatuses[email.id] = .failed(error.localizedDescription)
+                    persistEmailCollections()
                 }
             }
         }

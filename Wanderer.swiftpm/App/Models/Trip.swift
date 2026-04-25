@@ -13,6 +13,9 @@ final class Trip {
     
     @Relationship(deleteRule: .cascade, inverse: \ItineraryItem.trip)
     var items: [ItineraryItem] = []
+
+    @Relationship(deleteRule: .cascade, inverse: \EmailSource.trip)
+    var emailSources: [EmailSource] = []
     
     init(
         name: String,
