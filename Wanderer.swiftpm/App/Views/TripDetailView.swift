@@ -115,18 +115,24 @@ struct TripDetailView: View {
         syncError = nil
         
         Task {
-            let searchStartDate = Calendar.current.date(byAdding: .year, value: -1, to: trip.startDate) ?? trip.startDate
-            let emails = await EmailFetchService.shared.fetchTravelEmails(
-                from: searchStartDate,
-                to: trip.endDate
-            )
+            let emails = await EmailFetchService.shared.fetchTravelEmails()
             
             // Extract itinerary items from fetched emails
             var newItems: [ItineraryItem] = []
             for email in emails {
                 do {
                     let extracted = try await ItineraryParserService.shared.parse(emailText: email.bodyText)
-                    newItems.append(contentsOf: extracted)
+                    
+                    for item in extracted {
+                        // Check if the item's time overlaps with the trip's dates
+                        // We add a 1 day buffer to account for time zones / overnight travel
+                        let paddedStart = Calendar.current.date(byAdding: .day, value: -1, to: trip.startDate) ?? trip.startDate
+                        let paddedEnd = Calendar.current.date(byAdding: .day, value: 1, to: trip.endDate) ?? trip.endDate
+                        
+                        if item.startTime <= paddedEnd && item.endTime >= paddedStart {
+                            newItems.append(item)
+                        }
+                    }
                 } catch {
                     print("Error parsing email \(email.subject): \(error)")
                 }
@@ -140,9 +146,9 @@ struct TripDetailView: View {
                 isSyncing = false
                 
                 if emails.isEmpty {
-                    syncError = "No travel emails found for \(trip.name) (\(trip.startDate.formatted(.dateTime.month().day())) – \(trip.endDate.formatted(.dateTime.month().day())))."
+                    syncError = "No travel emails found."
                 } else if newItems.isEmpty {
-                    syncError = "Found \(emails.count) emails, but could not extract any itinerary items."
+                    syncError = "Found \(emails.count) travel emails, but no itinerary items within the dates of \(trip.name)."
                 }
             }
         }
