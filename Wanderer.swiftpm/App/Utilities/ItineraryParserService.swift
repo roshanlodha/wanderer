@@ -565,6 +565,7 @@ class ItineraryParserService {
             locationName: "Local LLM Port",
             provider: "MLX Local",
             bookingReference: "MLX-SWIFT-1",
+            alternativeReference: nil,
             travelMode: "Flight",
             notes: nil
         )
