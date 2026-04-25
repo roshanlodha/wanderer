@@ -121,12 +121,40 @@ class ItineraryParserService {
     /// Strips HTML tags, URLs, and collapses excessive whitespace to reduce token count.
     /// Used by ALL engines to normalize the email text before sending to the LLM.
     private func preprocessEmailText(_ text: String, maxChars: Int = 6000) -> String {
-        // Remove HTML tags
-        var cleaned = text.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
+        // Remove script/style blocks and remaining HTML tags.
+        var cleaned = text.replacingOccurrences(of: "(?is)<style[^>]*>.*?</style>", with: " ", options: .regularExpression)
+        cleaned = cleaned.replacingOccurrences(of: "(?is)<script[^>]*>.*?</script>", with: " ", options: .regularExpression)
+        cleaned = cleaned.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
+
+        // Decode common entities often present in provider email bodies.
+        cleaned = cleaned
+            .replacingOccurrences(of: "&nbsp;", with: " ")
+            .replacingOccurrences(of: "&#160;", with: " ")
+            .replacingOccurrences(of: "&amp;", with: "&")
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&#39;", with: "'")
+
+        // Remove CSS declaration noise commonly found in raw confirmation emails.
+        cleaned = cleaned.replacingOccurrences(of: "(?i)\\.[a-z0-9_-]+\\s*\\{[^\\}]{0,1000}\\}", with: " ", options: .regularExpression)
+        cleaned = cleaned.replacingOccurrences(of: "(?i)@[a-z-]+\\s*[^\\{]*\\{[^\\}]{0,1000}\\}", with: " ", options: .regularExpression)
+        cleaned = cleaned.replacingOccurrences(of: "(?i)\\b[a-z-]+\\s*:\\s*[^;\\n]{1,120};", with: " ", options: .regularExpression)
+
         // Remove URLs (they waste tokens and confuse extraction)
         cleaned = cleaned.replacingOccurrences(of: "https?://[^\\s]+", with: "", options: .regularExpression)
         // Remove email signatures / legal boilerplate markers
         cleaned = cleaned.replacingOccurrences(of: "(?i)(unsubscribe|privacy policy|terms of service|view in browser|click here|manage preferences|email preferences).*", with: "", options: .regularExpression)
+
+        // Drop obvious preamble noise before the first travel-relevant anchor phrase.
+        let lowered = cleaned.lowercased()
+        let anchors = [
+            "reservation", "confirmation", "itinerary", "hotel", "flight",
+            "check-in", "check in", "booking", "arrival", "departure", "room"
+        ]
+        if let firstAnchor = anchors.compactMap({ lowered.range(of: $0) }).map({ $0.lowerBound }).min(),
+           cleaned.distance(from: cleaned.startIndex, to: firstAnchor) > 300 {
+            cleaned = String(cleaned[firstAnchor...])
+        }
+
         // Collapse whitespace
         cleaned = cleaned.replacingOccurrences(of: "[\\s]+", with: " ", options: .regularExpression)
         // Trim

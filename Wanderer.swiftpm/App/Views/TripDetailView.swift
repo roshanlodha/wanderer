@@ -10,6 +10,8 @@ struct TripDetailView: View {
     @State private var isFetchingEmails = false
     @State private var isExtracting = false
     @State private var fetchedEmails: [FetchedEmail] = []
+    @State private var importantEmails: [FetchedEmail] = []
+    @State private var outsideRangeEmails: [FetchedEmail] = []
     @State private var emailStatuses: [String: FetchedEmail.ExtractionStatus] = [:]
     @State private var expandedEmailIds: Set<String> = []
     @State private var syncError: String?
@@ -43,6 +45,10 @@ struct TripDetailView: View {
     var isBusy: Bool {
         isFetchingEmails || isExtracting
     }
+
+    var hasAnyEmailSections: Bool {
+        !fetchedEmails.isEmpty || !importantEmails.isEmpty || !outsideRangeEmails.isEmpty
+    }
     
     var body: some View {
         ScrollView {
@@ -53,7 +59,7 @@ struct TripDetailView: View {
                 }
                 
                 // Empty state
-                if !isBusy && trip.items.isEmpty && fetchedEmails.isEmpty {
+                if !isBusy && trip.items.isEmpty && !hasAnyEmailSections {
                     emptyStateView
                 } else {
                     // Itinerary items
@@ -62,7 +68,7 @@ struct TripDetailView: View {
                     }
                     
                     // Fetched email previews
-                    if !fetchedEmails.isEmpty {
+                    if hasAnyEmailSections {
                         emailsSection
                     }
                 }
@@ -225,40 +231,92 @@ struct TripDetailView: View {
         VStack(alignment: .leading, spacing: 8) {
             Divider()
                 .padding(.vertical, 12)
-            
-            HStack {
-                Text("Detected Emails")
-                    .font(.headline)
-                Spacer()
-                
-                Text("\(fetchedEmails.count)")
-                    .font(.caption)
-                    .fontWeight(.semibold)
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 2)
-                    .background(Color.blue)
-                    .clipShape(Capsule())
-                
-                // Extract All button
-                Button {
-                    extractAllEmails()
-                } label: {
-                    Label("Extract All", systemImage: "sparkles")
+
+            if !fetchedEmails.isEmpty {
+                HStack {
+                    Text("Detected Emails")
+                        .font(.headline)
+                    Spacer()
+
+                    Text("\(fetchedEmails.count)")
                         .font(.caption)
                         .fontWeight(.semibold)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2)
+                        .background(Color.blue)
+                        .clipShape(Capsule())
+
+                    // Extract All button
+                    Button {
+                        extractAllEmails()
+                    } label: {
+                        Label("Extract All", systemImage: "sparkles")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.green)
+                    .controlSize(.small)
+                    .disabled(isExtracting || fetchedEmails.isEmpty)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(.green)
-                .controlSize(.small)
-                .disabled(isExtracting || fetchedEmails.isEmpty)
+                .padding(.horizontal)
+
+                ForEach(fetchedEmails) { email in
+                    emailRow(email)
+                }
             }
-            .padding(.horizontal)
-            
-            ForEach(fetchedEmails) { email in
-                emailRow(email)
+
+            if !importantEmails.isEmpty {
+                sectionHeader(title: "Important Emails", count: importantEmails.count, color: .indigo)
+                Text("Useful trip-related messages (like ETA/visa/insurance) that are not auto-included in itinerary parsing.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal)
+
+                ForEach(importantEmails) { email in
+                    secondaryEmailRow(email, label: "Important", labelColor: .indigo) {
+                        includeInItinerary(email: email, from: .important)
+                    }
+                }
+            }
+
+            if !outsideRangeEmails.isEmpty {
+                sectionHeader(title: "Outside Email Search Range", count: outsideRangeEmails.count, color: .orange)
+                Text("These emails are outside this trip's Email Search Date Range and are excluded from Extract All until included.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal)
+
+                ForEach(outsideRangeEmails) { email in
+                    secondaryEmailRow(email, label: "Outside Range", labelColor: .orange) {
+                        includeInItinerary(email: email, from: .outsideRange)
+                    }
+                }
             }
         }
+    }
+
+    private func sectionHeader(title: String, count: Int, color: Color) -> some View {
+        HStack {
+            Text(title)
+                .font(.headline)
+            Spacer()
+            Text("\(count)")
+                .font(.caption)
+                .fontWeight(.semibold)
+                .foregroundColor(.white)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 2)
+                .background(color)
+                .clipShape(Capsule())
+        }
+        .padding(.horizontal)
+    }
+
+    private enum EmailBucket {
+        case important
+        case outsideRange
     }
     
     // MARK: - Email Row
@@ -349,6 +407,93 @@ struct TripDetailView: View {
         }
         .padding(12)
         .background(backgroundForStatus(status))
+        .cornerRadius(10)
+        .padding(.horizontal)
+    }
+
+    @ViewBuilder
+    private func secondaryEmailRow(_ email: FetchedEmail, label: String, labelColor: Color, includeAction: @escaping () -> Void) -> some View {
+        let isExpanded = expandedEmailIds.contains(email.id)
+
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .top) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        if isExpanded {
+                            expandedEmailIds.remove(email.id)
+                        } else {
+                            expandedEmailIds.insert(email.id)
+                        }
+                    }
+                } label: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 8) {
+                            Text(label)
+                                .font(.caption2)
+                                .fontWeight(.semibold)
+                                .foregroundColor(labelColor)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(labelColor.opacity(0.12))
+                                .clipShape(Capsule())
+
+                            Text(email.subject)
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                                .lineLimit(isExpanded ? nil : 2)
+                                .multilineTextAlignment(.leading)
+                        }
+
+                        HStack {
+                            Text(email.sender)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
+                            Spacer()
+                            Text(email.date, format: .dateTime.month(.abbreviated).day())
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+
+                VStack(spacing: 8) {
+                    Button {
+                        includeAction()
+                    } label: {
+                        Label("Include in Itinerary", systemImage: "plus.circle.fill")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+
+                    Button {
+                        removeEmail(email)
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title3)
+                            .foregroundColor(.red)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.leading, 4)
+            }
+
+            if isExpanded {
+                Divider()
+                    .padding(.vertical, 4)
+
+                Text(email.bodyText)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.bottom, 4)
+            }
+        }
+        .padding(12)
+        .background(Color(.secondarySystemGroupedBackground))
         .cornerRadius(10)
         .padding(.horizontal)
     }
@@ -483,7 +628,27 @@ struct TripDetailView: View {
     private func removeEmail(_ email: FetchedEmail) {
         withAnimation {
             fetchedEmails.removeAll { $0.id == email.id }
+            importantEmails.removeAll { $0.id == email.id }
+            outsideRangeEmails.removeAll { $0.id == email.id }
             emailStatuses.removeValue(forKey: email.id)
+            expandedEmailIds.remove(email.id)
+        }
+    }
+
+    private func includeInItinerary(email: FetchedEmail, from bucket: EmailBucket) {
+        withAnimation {
+            switch bucket {
+            case .important:
+                importantEmails.removeAll { $0.id == email.id }
+            case .outsideRange:
+                outsideRangeEmails.removeAll { $0.id == email.id }
+            }
+
+            if !fetchedEmails.contains(where: { $0.id == email.id }) {
+                fetchedEmails.append(email)
+                fetchedEmails.sort { $0.date > $1.date }
+            }
+            emailStatuses[email.id] = .pending
         }
     }
     
@@ -529,6 +694,56 @@ struct TripDetailView: View {
             return item.startTime <= paddedEnd && itemEndTime >= paddedStart
         }
     }
+
+    private var effectiveEmailSearchRange: (start: Date, end: Date) {
+        let start = Calendar.current.startOfDay(for: trip.emailSearchStartDate ?? trip.startDate)
+        let endBase = Calendar.current.startOfDay(for: trip.emailSearchEndDate ?? trip.endDate)
+        let end = endBase.addingTimeInterval(86400 - 1)
+        return (start, end)
+    }
+
+    private func isWithinEmailSearchRange(_ email: FetchedEmail) -> Bool {
+        let range = effectiveEmailSearchRange
+        return email.date >= range.start && email.date <= range.end
+    }
+
+    private func isForwardedSubject(_ subject: String) -> Bool {
+        let trimmed = subject.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.range(of: "(?i)^(fw|fwd)\\s*[:\\-]", options: .regularExpression) != nil
+    }
+
+    private func applySecondPassItineraryFilter(_ emails: [FetchedEmail]) -> (kept: [FetchedEmail], removedCount: Int) {
+        var removedCount = 0
+        let kept = emails.filter { email in
+            if isForwardedSubject(email.subject) {
+                removedCount += 1
+                return false
+            }
+            return true
+        }
+        return (kept, removedCount)
+    }
+
+    private func isImportantNonItineraryEmail(_ email: FetchedEmail) -> Bool {
+        let text = "\(email.subject) \(email.bodyText)".lowercased()
+
+        let importantSignals = [
+            "electronic travel authorization", "travel authorization", "eta",
+            "visa", "e-visa", "entry permit", "esta", "passport",
+            "immigration", "travel insurance", "insurance certificate",
+            "health declaration", "entry requirements"
+        ]
+
+        let itinerarySignals = [
+            "reservation confirmation", "booking confirmation", "itinerary",
+            "flight", "check-in", "check in", "hotel", "room",
+            "ticket", "boarding pass", "train", "bus"
+        ]
+
+        let isImportant = importantSignals.contains { text.contains($0) }
+        let isItineraryLike = itinerarySignals.contains { text.contains($0) }
+        return isImportant && !isItineraryLike
+    }
     
     // MARK: - Phase 1: Fetch Emails (no extraction)
     
@@ -544,20 +759,34 @@ struct TripDetailView: View {
             }
             
             let emails = await EmailFetchService.shared.fetchTravelEmails()
+            let secondPass = applySecondPassItineraryFilter(emails)
+            let range = effectiveEmailSearchRange
+            let inRange = secondPass.kept.filter { isWithinEmailSearchRange($0) }
+            let outsideRange = secondPass.kept.filter { !isWithinEmailSearchRange($0) }
+            let important = inRange.filter { isImportantNonItineraryEmail($0) }
+            let itinerary = inRange.filter { !isImportantNonItineraryEmail($0) }
             
             await MainActor.run {
-                fetchedEmails = emails
+                fetchedEmails = itinerary.sorted { $0.date > $1.date }
+                importantEmails = important.sorted { $0.date > $1.date }
+                outsideRangeEmails = outsideRange.sorted { $0.date > $1.date }
                 // Initialize all statuses to pending
                 emailStatuses = [:]
-                for email in emails {
+                for email in itinerary {
                     emailStatuses[email.id] = .pending
                 }
                 isFetchingEmails = false
                 
-                if emails.isEmpty {
+                if secondPass.kept.isEmpty {
                     syncError = "No travel-related emails found. Try connecting an email account in Settings or check that you have travel confirmation emails."
                 } else {
-                    syncStatus = "Found \(emails.count) potential travel emails. Review them below and tap 'Extract All' or extract individually."
+                    var statusParts: [String] = []
+                    statusParts.append("Itinerary: \(itinerary.count)")
+                    if !important.isEmpty { statusParts.append("Important: \(important.count)") }
+                    if !outsideRange.isEmpty { statusParts.append("Outside range: \(outsideRange.count)") }
+                    if secondPass.removedCount > 0 { statusParts.append("FW removed: \(secondPass.removedCount)") }
+                    syncStatus = statusParts.joined(separator: " · ")
+                    print("[TripDetailView] Email search range: \(range.start) to \(range.end)")
                 }
             }
         }
