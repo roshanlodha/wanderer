@@ -31,7 +31,8 @@ struct LaunchView: View {
                     authManager.handleAppleSignIn(result: result)
                 }
                 .signInWithAppleButtonStyle(.black)
-                .frame(maxWidth: 340, minHeight: 50)
+                .frame(height: 50)
+                .frame(maxWidth: 340)
                 .clipShape(RoundedRectangle(cornerRadius: 10))
                 
                 Button(action: {
