@@ -17,7 +17,9 @@ CRITICAL EXTRACTION RULES & EDGE CASES:
 - `locationName`: Extract the MOST precise physical location available (full address, station name, or IATA airport code).
 - `provider`: The actual operator (e.g., "Virgin Atlantic", "Scottish Citylink", "Airbnb", "OpenTable").
 - `bookingReference`: Extract the PRIMARY reservation/PNR number. 
-- Dual Confirmations: If there are multiple confirmation numbers (e.g., an Airline PNR and a Capital One Travel ID), put the primary operator's ID in `bookingReference` and add the secondary ID to the `notes` field.
+- `alternativeReference`: If any additional/secondary reference exists, capture it here (e.g., OTA confirmation ID, travel-portal confirmation, secondary locator, confirmation from intermediary booking platform).
+- Dual Confirmations: If there are multiple confirmation numbers (e.g., an Airline PNR and a Capital One Travel ID), put the primary operator's ID in `bookingReference` and put the additional one in `alternativeReference`.
+- If more than one additional reference exists, choose the most actionable one for `alternativeReference` and place the rest in `notes`.
 
 3. Complex Routing & Multi-Day Events:
 - Layovers (CRITICAL): If an email details a flight with a layover (e.g., LIS to CLE via PHL), you MUST split this into TWO distinct JSON objects (Leg 1: LIS to PHL, Leg 2: PHL to CLE). 
@@ -52,6 +54,7 @@ EXPECTED SCHEMA:
       "locationName": "String",
       "provider": "String (optional)",
       "bookingReference": "String (optional)",
+      "alternativeReference": "String (optional)",
       "travelMode": "Flight | Hotel | Bus | Train | Activity",
       "notes": "String (optional)"
     }
@@ -69,8 +72,9 @@ GOLD STANDARD EXAMPLE OUTPUT:
       "locationName": "London Heathrow Airport (Hounslow, UK)",
       "provider": "Virgin Atlantic",
       "bookingReference": "DA2ITC",
+      "alternativeReference": "H-M-BRHXT3",
       "travelMode": "Flight",
-      "notes": "Capital One Confirmation: H-M-BRHXT3"
+      "notes": null
     },
     {
       "title": "Check-in: Four Points Flex by Sheraton London Euston",
@@ -79,6 +83,7 @@ GOLD STANDARD EXAMPLE OUTPUT:
       "locationName": "8-11 Upper Woburn Place, London, WC1H 0JW, UK",
       "provider": "Marriott",
       "bookingReference": "H-Q37FKZXZT9M3",
+      "alternativeReference": null,
       "travelMode": "Hotel",
       "notes": "Capital One Confirmation. Paid via Venture X; fully refundable before May 3."
     },
@@ -89,6 +94,7 @@ GOLD STANDARD EXAMPLE OUTPUT:
       "locationName": "Glasgow Central Station (Gordon St, Glasgow G1 3SQ)",
       "provider": "Avanti West Coast",
       "bookingReference": "20094934",
+      "alternativeReference": null,
       "travelMode": "Train",
       "notes": "Coach B, Seat 49 (4h 31m duration)"
     },
@@ -99,6 +105,7 @@ GOLD STANDARD EXAMPLE OUTPUT:
       "locationName": "Lorn Drive, Glencoe, PH49 4HR, Scotland",
       "provider": "Airbnb",
       "bookingReference": "40cil8jfvfail6e8osfgg7pwikybz1wqoo3t",
+      "alternativeReference": null,
       "travelMode": "Hotel",
       "notes": null
     },
@@ -109,6 +116,7 @@ GOLD STANDARD EXAMPLE OUTPUT:
       "locationName": "15/16 Chatham Street, Dublin 2, Ireland",
       "provider": "OpenTable",
       "bookingReference": "65450",
+      "alternativeReference": null,
       "travelMode": "Activity",
       "notes": null
     },
@@ -119,6 +127,7 @@ GOLD STANDARD EXAMPLE OUTPUT:
       "locationName": "Estrada de Vila Chã, 2580-413 Alenquer, Portugal",
       "provider": null,
       "bookingReference": null,
+      "alternativeReference": null,
       "travelMode": "Activity",
       "notes": "May 11 (Workshop meeting & Welcome BBQ), May 12 (Wedding Ceremony & Gala). Transportation to Lisbon airport declined."
     }
@@ -145,12 +154,13 @@ JSON SCHEMA TO FOLLOW EXACTLY:
       "locationName": "String",
       "provider": "String or null",
       "bookingReference": "String or null",
+      "alternativeReference": "String or null",
       "travelMode": "Flight|Hotel|Bus|Train|Activity",
       "notes": "String or null"
     }
   ]
 }
-RULES: Use local time. Split layovers. Hotel: check-in 15:00, check-out 11:00. If the email is marketing/promo or has no travel data, set "relevant": false and "items": [].
+RULES: Use local time. Split layovers. Hotel: check-in 15:00, check-out 11:00. Map any extra/secondary reference number into "alternativeReference" (not "bookingReference"). If the email is marketing/promo or has no travel data, set "relevant": false and "items": [].
 
 [CONTEXT_TEMPLATE]
 CONTEXT INFO:

@@ -75,6 +75,17 @@ struct TimelineItemView: View {
                             .foregroundColor(.secondary)
                     }
                 }
+
+                if let altRef = item.alternativeReference, !altRef.isEmpty {
+                    HStack(spacing: 4) {
+                        Image(systemName: "number.square")
+                            .foregroundColor(.orange)
+                            .font(.caption)
+                        Text("Alternative Reference: \(altRef)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
                 
                 if let notes = item.notes, !notes.isEmpty {
                     HStack(alignment: .top, spacing: 4) {

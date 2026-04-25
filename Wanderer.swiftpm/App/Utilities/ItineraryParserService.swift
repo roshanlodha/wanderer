@@ -16,6 +16,7 @@ struct ExtractedItineraryItem: Codable {
     let locationName: String?
     let provider: String?
     let bookingReference: String?
+    let alternativeReference: String?
     let travelMode: String?
     let notes: String?
 }
@@ -267,6 +268,7 @@ class ItineraryParserService {
                 endTime: item.endTime,
                 locationName: item.locationName ?? "Unknown Location",
                 bookingReference: item.bookingReference,
+                alternativeReference: item.alternativeReference,
                 provider: item.provider,
                 notes: item.notes,
                 rawTextSource: emailText,
@@ -320,13 +322,14 @@ class ItineraryParserService {
                                     "locationName": ["type": "string"],
                                     "provider": ["type": ["string", "null"]],
                                     "bookingReference": ["type": ["string", "null"]],
+                                    "alternativeReference": ["type": ["string", "null"], "description": "Any secondary/additional confirmation, locator, or reservation number in the email"],
                                     "travelMode": [
                                         "type": "string",
                                         "enum": ["Flight", "Hotel", "Bus", "Train", "Activity", "Document", "Other"]
                                     ],
                                     "notes": ["type": ["string", "null"]]
                                 ],
-                                "required": ["title", "startTime", "endTime", "locationName", "provider", "bookingReference", "travelMode", "notes"],
+                                "required": ["title", "startTime", "endTime", "locationName", "provider", "bookingReference", "alternativeReference", "travelMode", "notes"],
                                 "additionalProperties": false
                             ]
                         ]

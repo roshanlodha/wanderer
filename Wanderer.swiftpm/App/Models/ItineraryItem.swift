@@ -31,6 +31,7 @@ final class ItineraryItem {
     var endTime: Date?
     var locationName: String
     var bookingReference: String?
+    var alternativeReference: String?
     var provider: String?
     var notes: String?
     var rawTextSource: String?
@@ -40,12 +41,13 @@ final class ItineraryItem {
     var trip: Trip?
     var emailSource: EmailSource?
     
-    init(title: String, startTime: Date, endTime: Date? = nil, locationName: String, bookingReference: String? = nil, provider: String? = nil, notes: String? = nil, rawTextSource: String? = nil, travelMode: TravelMode) {
+    init(title: String, startTime: Date, endTime: Date? = nil, locationName: String, bookingReference: String? = nil, alternativeReference: String? = nil, provider: String? = nil, notes: String? = nil, rawTextSource: String? = nil, travelMode: TravelMode) {
         self.title = title
         self.startTime = startTime
         self.endTime = endTime
         self.locationName = locationName
         self.bookingReference = bookingReference
+        self.alternativeReference = alternativeReference
         self.provider = provider
         self.notes = notes
         self.rawTextSource = rawTextSource

@@ -17,6 +17,7 @@ struct TripDetailView: View {
     @State private var syncTotal: Double = 0
     @State private var syncStatus: String = ""
     @State private var showAddItemSheet = false
+    @State private var extractionTask: Task<Void, Never>?
     
     // Manual add form state
     @State private var manualTitle = ""
@@ -156,6 +157,21 @@ struct TripDetailView: View {
                     Text("\(Int(syncProgress)) / \(Int(syncTotal))")
                         .font(.caption)
                         .foregroundColor(.secondary)
+                }
+            }
+
+            if isExtracting {
+                HStack {
+                    Spacer()
+                    Button(role: .destructive) {
+                        stopParsing()
+                    } label: {
+                        Label("Stop Parsing", systemImage: "stop.fill")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
                 }
             }
             
@@ -434,9 +450,12 @@ struct TripDetailView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
+                    Button {
                         showAddItemSheet = false
                         resetManualForm()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundColor(.red)
                     }
                 }
                 ToolbarItem(placement: .confirmationAction) {
@@ -569,8 +588,9 @@ struct TripDetailView: View {
     private func extractEmails(_ emails: [FetchedEmail]) {
         isExtracting = true
         syncError = nil
-        
-        Task {
+
+        extractionTask?.cancel()
+        extractionTask = Task {
             await MainActor.run {
                 syncStatus = "Extracting itinerary from \(emails.count) emails..."
                 syncTotal = Double(emails.count)
@@ -581,8 +601,14 @@ struct TripDetailView: View {
             var totalRejected = 0
             var totalFailed = 0
             var totalDuplicates = 0
+            var wasCancelled = false
             
             for (index, email) in emails.enumerated() {
+                if Task.isCancelled {
+                    wasCancelled = true
+                    break
+                }
+
                 await MainActor.run {
                     syncStatus = "Extracting \(index + 1) of \(emails.count): \(email.subject.prefix(30))..."
                     emailStatuses[email.id] = .extracting
@@ -594,6 +620,11 @@ struct TripDetailView: View {
                         tripStartDate: trip.startDate,
                         tripEndDate: trip.endDate
                     )
+
+                    if Task.isCancelled {
+                        wasCancelled = true
+                        break
+                    }
                     
                     await MainActor.run {
                         if !result.relevant {
@@ -619,6 +650,9 @@ struct TripDetailView: View {
                         }
                         syncProgress += 1
                     }
+                } catch is CancellationError {
+                    wasCancelled = true
+                    break
                 } catch {
                     totalFailed += 1
                     print("[Extraction] Error parsing email '\(email.subject)': \(error)")
@@ -643,6 +677,7 @@ struct TripDetailView: View {
                 }
                 
                 isExtracting = false
+                extractionTask = nil
                 
                 // Build summary
                 var parts: [String] = []
@@ -650,14 +685,22 @@ struct TripDetailView: View {
                 if totalDuplicates > 0 { parts.append("⏭ \(totalDuplicates) duplicates skipped") }
                 if totalRejected > 0 { parts.append("🚫 \(totalRejected) non-travel emails removed") }
                 if totalFailed > 0 { parts.append("❌ \(totalFailed) emails failed to parse") }
+                if wasCancelled { parts.append("🛑 Parsing stopped") }
                 
                 if totalAdded == 0 && totalFailed > 0 {
                     syncError = parts.joined(separator: "\n") + "\n\nCheck your API key and extraction engine in Settings."
                 } else if !parts.isEmpty {
                     syncStatus = parts.joined(separator: " · ")
+                } else if wasCancelled {
+                    syncStatus = "Parsing stopped."
                 }
             }
         }
+    }
+
+    private func stopParsing() {
+        extractionTask?.cancel()
+        syncStatus = "Stopping parsing..."
     }
     
     // MARK: - Extract Single Email

@@ -107,9 +107,8 @@ struct SettingsView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button(action: { dismiss() }) {
-                        Image(systemName: "checkmark")
-                            .foregroundColor(.blue)
-                            .fontWeight(.bold)
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundColor(.red)
                     }
                 }
             }
