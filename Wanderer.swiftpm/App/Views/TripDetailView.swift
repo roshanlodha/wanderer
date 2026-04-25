@@ -814,15 +814,26 @@ struct TripDetailView: View {
         email.date < effectiveIgnoreEmailsBefore
     }
 
-    private func isForwardedSubject(_ subject: String) -> Bool {
+    private func isHardFilteredSubject(_ subject: String) -> Bool {
         let trimmed = subject.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.range(of: "(?i)^(fw|fwd)\\s*[:\\-]", options: .regularExpression) != nil
+        
+        // Filter out forwarded emails: "FW:", "Fw:", etc.
+        if trimmed.range(of: "(?i)^(fw|fwd)\\s*[:\\-]", options: .regularExpression) != nil {
+            return true
+        }
+        
+        // Filter out event acceptance emails
+        if trimmed.range(of: "(?i)event\\s+accepted", options: .regularExpression) != nil {
+            return true
+        }
+        
+        return false
     }
 
     private func applySecondPassItineraryFilter(_ emails: [FetchedEmail]) -> (kept: [FetchedEmail], removedCount: Int) {
         var removedCount = 0
         let kept = emails.filter { email in
-            if isForwardedSubject(email.subject) {
+            if isHardFilteredSubject(email.subject) {
                 removedCount += 1
                 return false
             }
