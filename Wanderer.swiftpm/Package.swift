@@ -36,7 +36,8 @@ let package = Package(
             ],
             capabilities: [
                 .incomingNetworkConnections(),
-                .outgoingNetworkConnections()
+                .outgoingNetworkConnections(),
+                .fileAccess(.downloadsFolder, mode: .readWrite)
             ],
             additionalInfoPlistContentFilePath: "Info.plist"
         )
@@ -52,7 +53,8 @@ let package = Package(
             ],
             path: "App",
             resources: [
-                .process("Secrets.plist")
+                .process("Secrets.plist"),
+                .process("SystemPrompt.txt")
             ]
         )
     ]

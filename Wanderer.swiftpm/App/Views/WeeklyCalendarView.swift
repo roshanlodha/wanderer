@@ -11,10 +11,21 @@ private struct CalendarSegment: Identifiable {
     var totalColumns: Int = 1
 }
 
+private struct HotelDaySegment: Identifiable {
+    let id: String
+    let item: ItineraryItem
+    let dayIndex: Int
+    let dayStart: Date
+    let dayEnd: Date
+    var stackIndex: Int = 0
+}
+
 struct WeeklyCalendarView: View {
     let trip: Trip
+    var onSelectItem: ((ItineraryItem) -> Void)? = nil
 
     @State private var weekStartDate: Date
+    @AppStorage("calendarTimeZoneIdentifier") private var calendarTimeZoneIdentifier: String = ""
 
     private let hourHeight: CGFloat = 88
     private let timeColumnWidth: CGFloat = 72
@@ -25,11 +36,40 @@ struct WeeklyCalendarView: View {
         _weekStartDate = State(initialValue: Self.initialWeekStart(for: trip))
     }
 
-    private var userTimeZone: TimeZone { .current }
+    init(trip: Trip, onSelectItem: ((ItineraryItem) -> Void)? = nil) {
+        self.trip = trip
+        self.onSelectItem = onSelectItem
+        _weekStartDate = State(initialValue: Self.initialWeekStart(for: trip))
+    }
+
+    private var calendarTimeZone: TimeZone {
+        if calendarTimeZoneIdentifier.isEmpty {
+            return .current
+        }
+        return TimeZone(identifier: calendarTimeZoneIdentifier) ?? .current
+    }
+
+    private var availableTimeZones: [TimeZone] {
+        var zones: [TimeZone] = [calendarTimeZone, .current]
+        if let utc = TimeZone(secondsFromGMT: 0) {
+            zones.append(utc)
+        }
+
+        for item in trip.items {
+            if let tz = ItineraryParserService.shared.timeZone(fromGMTOffset: item.timeZoneGMTOffset) {
+                zones.append(tz)
+            }
+        }
+
+        var seen = Set<String>()
+        return zones
+            .filter { seen.insert($0.identifier).inserted }
+            .sorted { $0.secondsFromGMT() < $1.secondsFromGMT() }
+    }
 
     private var userCalendar: Calendar {
         var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = userTimeZone
+        calendar.timeZone = calendarTimeZone
         calendar.firstWeekday = 1
         return calendar
     }
@@ -41,7 +81,7 @@ struct WeeklyCalendarView: View {
     private var weekRangeLabel: String {
         guard let lastDay = weekDays.last else { return "" }
         let formatter = DateFormatter()
-        formatter.timeZone = userTimeZone
+        formatter.timeZone = calendarTimeZone
         formatter.dateFormat = "MMM d"
 
         let start = formatter.string(from: weekStartDate)
@@ -51,13 +91,87 @@ struct WeeklyCalendarView: View {
     }
 
     private var currentTimeZoneLabel: String {
-        let abbreviation = userTimeZone.abbreviation() ?? userTimeZone.identifier
-        let offset = ItineraryParserService.shared.gmtOffsetString(for: userTimeZone, at: Date())
+        let abbreviation = calendarTimeZone.abbreviation() ?? calendarTimeZone.identifier
+        let offset = ItineraryParserService.shared.gmtOffsetString(for: calendarTimeZone, at: Date())
         return "\(abbreviation) (GMT\(offset))"
     }
 
+    /// Returns the event's own local timezone when available.
+    private func eventTimeZone(for item: ItineraryItem) -> TimeZone {
+        ItineraryParserService.shared.timeZone(fromGMTOffset: item.timeZoneGMTOffset) ?? calendarTimeZone
+    }
+
+    private var hotelLayout: (segments: [HotelDaySegment], maxStacks: Int) {
+        let startOfWeek = weekStartDate
+        let endOfWeek = userCalendar.date(byAdding: .day, value: 7, to: startOfWeek) ?? startOfWeek
+        let hotels = trip.items.filter { $0.travelMode == .hotel }
+
+        var unresolved: [HotelDaySegment] = []
+
+        for hotel in hotels {
+            let itemStart = hotel.startTime
+            let itemEnd = max(hotel.endTime ?? hotel.startTime.addingTimeInterval(86_400), hotel.startTime.addingTimeInterval(1800))
+            guard itemEnd > startOfWeek, itemStart < endOfWeek else { continue }
+
+            for (dayIndex, day) in weekDays.enumerated() {
+                guard let nextDay = userCalendar.date(byAdding: .day, value: 1, to: day) else { continue }
+                let segmentStart = max(itemStart, day)
+                let segmentEnd = min(itemEnd, nextDay)
+                guard segmentEnd > segmentStart else { continue }
+
+                unresolved.append(
+                    HotelDaySegment(
+                        id: "\(hotel.id.uuidString)-hotel-\(dayIndex)",
+                        item: hotel,
+                        dayIndex: dayIndex,
+                        dayStart: segmentStart,
+                        dayEnd: segmentEnd
+                    )
+                )
+            }
+        }
+
+        var resolved: [HotelDaySegment] = []
+        var maxStacks = 0
+
+        for dayIndex in 0..<7 {
+            let daySegments = unresolved
+                .filter { $0.dayIndex == dayIndex }
+                .sorted {
+                    if $0.dayStart == $1.dayStart {
+                        return $0.dayEnd < $1.dayEnd
+                    }
+                    return $0.dayStart < $1.dayStart
+                }
+
+            var active: [HotelDaySegment] = []
+            for segment in daySegments {
+                active.removeAll { $0.dayEnd <= segment.dayStart }
+                let used = Set(active.map(\.stackIndex))
+
+                var nextStack = 0
+                while used.contains(nextStack) {
+                    nextStack += 1
+                }
+
+                var updated = segment
+                updated.stackIndex = nextStack
+                active.append(updated)
+                resolved.append(updated)
+                maxStacks = max(maxStacks, nextStack + 1)
+            }
+        }
+
+        return (resolved, maxStacks)
+    }
+
+    private var allDayRowHeight: CGFloat {
+        guard !hotelLayout.segments.isEmpty else { return 0 }
+        return CGFloat(max(hotelLayout.maxStacks, 1)) * 30 + 22
+    }
+
     private var totalGridHeight: CGFloat {
-        hourHeight * 24
+        allDayRowHeight + (hourHeight * 24)
     }
 
     private var weekSegments: [CalendarSegment] {
@@ -66,7 +180,8 @@ struct WeeklyCalendarView: View {
 
         var segments: [CalendarSegment] = []
 
-        for item in trip.items {
+        for item in trip.items where item.travelMode != .hotel {
+
             let itemStart = item.startTime
             let nominalEnd = item.endTime ?? itemStart.addingTimeInterval(3600)
             let itemEnd = max(nominalEnd, itemStart.addingTimeInterval(1800))
@@ -75,9 +190,9 @@ struct WeeklyCalendarView: View {
 
             for (dayIndex, day) in weekDays.enumerated() {
                 guard let nextDay = userCalendar.date(byAdding: .day, value: 1, to: day) else { continue }
+
                 let segmentStart = max(itemStart, day)
                 let segmentEnd = min(itemEnd, nextDay)
-
                 guard segmentEnd > segmentStart else { continue }
 
                 let startMinutes = CGFloat(segmentStart.timeIntervalSince(day) / 60)
@@ -115,6 +230,9 @@ struct WeeklyCalendarView: View {
                 ScrollView([.vertical, .horizontal]) {
                     ZStack(alignment: .topLeading) {
                         backgroundGrid
+                        ForEach(hotelLayout.segments) { segment in
+                            hotelStayCard(segment)
+                        }
                         currentTimeIndicator
                         ForEach(weekSegments) { segment in
                             segmentCard(segment)
@@ -141,7 +259,7 @@ struct WeeklyCalendarView: View {
                     Text("Calendar")
                         .font(.title2)
                         .fontWeight(.bold)
-                    Text("Showing everything in your current timezone: \(currentTimeZoneLabel)")
+                    Text("Showing events in selected timezone")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                 }
@@ -174,6 +292,19 @@ struct WeeklyCalendarView: View {
                         Image(systemName: "chevron.right")
                     }
                     .buttonStyle(.bordered)
+
+                    Menu {
+                        Picker("Calendar Time Zone", selection: $calendarTimeZoneIdentifier) {
+                            Text("Device Time Zone").tag("")
+                            ForEach(availableTimeZones, id: \.identifier) { timeZone in
+                                Text(timeZoneDisplayName(timeZone)).tag(timeZone.identifier)
+                            }
+                        }
+                    } label: {
+                        Label("Time Zone", systemImage: "globe")
+                    }
+                    .menuStyle(.borderlessButton)
+                    .buttonStyle(.bordered)
                 }
             }
 
@@ -182,6 +313,10 @@ struct WeeklyCalendarView: View {
                     .font(.headline)
 
                 Spacer()
+
+                Text(currentTimeZoneLabel)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
 
                 HStack(spacing: 12) {
                     legendSwatch(.flight)
@@ -234,8 +369,32 @@ struct WeeklyCalendarView: View {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(Color(.secondarySystemBackground))
 
+            if allDayRowHeight > 0 {
+                ForEach(Array(weekDays.enumerated()), id: \.offset) { index, _ in
+                    Rectangle()
+                        .fill(Color.black.opacity(0.03))
+                        .frame(width: dayColumnWidth, height: allDayRowHeight)
+                        .position(
+                            x: timeColumnWidth + (CGFloat(index) * dayColumnWidth) + (dayColumnWidth / 2),
+                            y: allDayRowHeight / 2
+                        )
+                }
+
+                Text("All-day")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .frame(width: timeColumnWidth - 12, alignment: .trailing)
+                    .position(x: (timeColumnWidth - 12) / 2, y: 12)
+
+                Path { path in
+                    path.move(to: CGPoint(x: 0, y: allDayRowHeight))
+                    path.addLine(to: CGPoint(x: timeColumnWidth + (dayColumnWidth * CGFloat(weekDays.count)), y: allDayRowHeight))
+                }
+                .stroke(Color.black.opacity(0.12), lineWidth: 1)
+            }
+
             ForEach(0...24, id: \.self) { hour in
-                let y = CGFloat(hour) * hourHeight
+                let y = allDayRowHeight + (CGFloat(hour) * hourHeight)
                 Path { path in
                     path.move(to: CGPoint(x: 0, y: y))
                     path.addLine(to: CGPoint(x: timeColumnWidth + (dayColumnWidth * CGFloat(weekDays.count)), y: y))
@@ -257,7 +416,7 @@ struct WeeklyCalendarView: View {
                     .font(.caption2)
                     .foregroundColor(.secondary)
                     .frame(width: timeColumnWidth - 12, alignment: .trailing)
-                    .position(x: (timeColumnWidth - 12) / 2, y: (CGFloat(hour) * hourHeight) + 10)
+                    .position(x: (timeColumnWidth - 12) / 2, y: allDayRowHeight + (CGFloat(hour) * hourHeight) + 10)
             }
         }
     }
@@ -291,8 +450,39 @@ struct WeeklyCalendarView: View {
         let minutes = CGFloat(now.timeIntervalSince(dayStart) / 60)
         return CGPoint(
             x: timeColumnWidth + (CGFloat(dayIndex) * dayColumnWidth),
-            y: (minutes / 60) * hourHeight
+            y: allDayRowHeight + ((minutes / 60) * hourHeight)
         )
+    }
+
+    private func hotelStayCard(_ segment: HotelDaySegment) -> some View {
+        let width: CGFloat = dayColumnWidth - 12
+        let x = timeColumnWidth + (CGFloat(segment.dayIndex) * dayColumnWidth) + 6
+        let y = 8 + (CGFloat(segment.stackIndex) * 30)
+
+        return HStack(spacing: 6) {
+            Image(systemName: segment.item.travelMode.icon)
+                .font(.caption2)
+            Text(segment.item.title)
+                .font(.caption2)
+                .fontWeight(.semibold)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .frame(width: width, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(TravelMode.hotel.calendarColor.opacity(0.85))
+        )
+        .foregroundColor(.white)
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(Color.white.opacity(0.2), lineWidth: 1)
+        )
+        .position(x: x + (width / 2), y: y + 11)
+        .onTapGesture {
+            onSelectItem?(segment.item)
+        }
     }
 
     private func segmentCard(_ segment: CalendarSegment) -> some View {
@@ -303,10 +493,12 @@ struct WeeklyCalendarView: View {
             + (CGFloat(segment.dayIndex) * dayColumnWidth)
             + widthPadding
             + (CGFloat(segment.column) * availableWidth)
-        let y = (segment.startMinutes / 60) * hourHeight
+        let y = allDayRowHeight + ((segment.startMinutes / 60) * hourHeight)
         let height = max(((segment.endMinutes - segment.startMinutes) / 60) * hourHeight, 36)
-        let userStart = formattedTime(segment.item.startTime)
-        let userEnd = formattedTime(segment.item.endTime ?? segment.item.startTime.addingTimeInterval(3600))
+        let userStart = formattedTime(segment.item.startTime, item: segment.item)
+        let userEnd = formattedTime(segment.item.endTime ?? segment.item.startTime.addingTimeInterval(3600), item: segment.item)
+        let sourceTZ = eventTimeZone(for: segment.item)
+        let sourceAbbreviation = sourceTZ.abbreviation() ?? sourceTZ.identifier
         let title = segment.item.title
         let location = segment.item.locationName
         let provider = segment.item.provider
@@ -324,6 +516,13 @@ struct WeeklyCalendarView: View {
             Text("\(userStart) - \(userEnd)")
                 .font(.caption2)
                 .foregroundColor(.white.opacity(0.92))
+
+            if sourceTZ.identifier != calendarTimeZone.identifier {
+                Text("Source TZ: \(sourceAbbreviation)")
+                    .font(.caption2)
+                    .foregroundColor(.white.opacity(0.82))
+                    .lineLimit(1)
+            }
 
             if !location.isEmpty {
                 Text(location)
@@ -364,11 +563,14 @@ struct WeeklyCalendarView: View {
             x: x + cardWidth / 2,
             y: y + height / 2
         )
+        .onTapGesture {
+            onSelectItem?(segment.item)
+        }
     }
 
-    private func formattedTime(_ date: Date) -> String {
+    private func formattedTime(_ date: Date, item: ItineraryItem) -> String {
         let formatter = DateFormatter()
-        formatter.timeZone = userTimeZone
+        formatter.timeZone = calendarTimeZone
         formatter.dateFormat = "h:mm a"
         return formatter.string(from: date)
     }
@@ -378,7 +580,7 @@ struct WeeklyCalendarView: View {
         formatter.dateFormat = "ha"
         formatter.amSymbol = "AM"
         formatter.pmSymbol = "PM"
-        formatter.timeZone = userTimeZone
+        formatter.timeZone = calendarTimeZone
 
         let date = userCalendar.date(bySettingHour: hour, minute: 0, second: 0, of: weekStartDate) ?? weekStartDate
         return formatter.string(from: date).lowercased()
@@ -438,6 +640,12 @@ struct WeeklyCalendarView: View {
         let reference = trip.items.isEmpty ? trip.startDate : (trip.items.min(by: { $0.startTime < $1.startTime })?.startTime ?? trip.startDate)
         let components = calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: reference)
         return calendar.date(from: components) ?? calendar.startOfDay(for: reference)
+    }
+
+    private func timeZoneDisplayName(_ timeZone: TimeZone) -> String {
+        let abbreviation = timeZone.abbreviation() ?? timeZone.identifier
+        let offset = ItineraryParserService.shared.gmtOffsetString(for: timeZone, at: Date())
+        return "\(abbreviation) (GMT\(offset))"
     }
 }
 

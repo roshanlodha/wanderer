@@ -177,3 +177,35 @@ CONTEXT INFO:
 - The current date is {CURRENT_DATE}.
 - The user's trip is scheduled from {TRIP_START} to {TRIP_END}.
 - IMPORTANT: Ensure any extracted dates (especially if year is missing) are mapped correctly to match the trip dates if they refer to the same days/months. Do NOT assume 1970 or current year blindly if it contradicts the trip dates.
+
+[OPENAI_TRIAGE_PROMPT]
+You classify travel emails for trip planning.
+Return strict JSON only.
+
+Definitions:
+- relevant=true when the email is travel-related for the user's trip context.
+- important=true only when the email is travel-related but does NOT contain concrete itinerary event details suitable for timeline extraction.
+- If relevant=false, important must be false.
+- Itinerary confirmations (flight, train, bus, hotel, booking confirmations with dates/times/locations) should be relevant=true and important=false.
+
+{CONTEXT}
+
+[APPLE_TRIAGE_PROMPT]
+Classify this email for trip planning.
+Return strict JSON only with this exact schema:
+{"relevant": boolean, "important": boolean}
+
+Rules:
+- If relevant is false, important must be false.
+- Set important true only when travel-related but not a concrete itinerary event email.
+- Flight/train/bus/hotel confirmations with actionable dates/times/locations are relevant true and important false.
+
+{CONTEXT}
+
+EMAIL:
+{EMAIL}
+
+[APPLE_JSON_ENFORCEMENT]
+Return exactly one JSON object and nothing else.
+Do not add markdown, comments, or prose.
+Do not wrap the JSON in backticks.

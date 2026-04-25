@@ -232,13 +232,13 @@ struct TripDetailView: View {
         case .overview:
             overviewContent
         case .calendar:
-            WeeklyCalendarView(trip: trip)
+            WeeklyCalendarView(trip: trip) { item in
+                prepareToEdit(item)
+            }
         case .map:
-            placeholderTab(
-                title: "Map",
-                systemImage: "map",
-                description: "Map view will live here."
-            )
+            TripMapView(trip: trip) { item in
+                prepareToEdit(item)
+            }
         }
     }
 
@@ -887,21 +887,21 @@ struct TripDetailView: View {
                         }
                     }
                     
-                    DatePicker("Start Time", selection: $manualStartTime)
+                    DatePicker("Start Time", selection: Binding(
+                        get: { manualStartTime },
+                        set: { manualStartTime = $0 }
+                    ))
                     
                     Toggle("Has End Time", isOn: $manualHasEndTime)
                     if manualHasEndTime {
-                        DatePicker("End Time", selection: $manualEndTime)
+                        DatePicker("End Time", selection: Binding(
+                            get: { manualEndTime },
+                            set: { manualEndTime = $0 }
+                        ))
                     }
-                }
-                
-                Section("Location & Provider") {
-                    TextField("Location", text: $manualLocation)
-                    TextField("Provider (optional)", text: $manualProvider)
-                    TextField("Booking Reference (optional)", text: $manualBookingRef)
-                }
 
-                Section("Time Zone") {
+                    Divider()
+
                     TextField("GMT Offset", text: $manualTimeZoneGMTOffset)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
@@ -921,7 +921,14 @@ struct TripDetailView: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
+
                 
+                Section("Location & Provider") {
+                    TextField("Location", text: $manualLocation)
+                    TextField("Provider (optional)", text: $manualProvider)
+                    TextField("Booking Reference (optional)", text: $manualBookingRef)
+                }
+
                 Section("Notes") {
                     TextField("Notes (optional)", text: $manualNotes, axis: .vertical)
                         .lineLimit(3...6)
@@ -1138,12 +1145,14 @@ struct TripDetailView: View {
     }
     
     private func saveManualItem() {
-        let endTime = manualHasEndTime ? manualEndTime : nil
         let timeZoneOffset = ItineraryParserService.shared.standardizedGMTOffset(manualTimeZoneGMTOffset)
+        
+        let startTime = fromLocalClockDate(manualStartTime, offset: timeZoneOffset)
+        let endTime = manualHasEndTime ? fromLocalClockDate(manualEndTime, offset: timeZoneOffset) : nil
 
         if let editingItem {
             editingItem.title = manualTitle
-            editingItem.startTime = manualStartTime
+            editingItem.startTime = startTime
             editingItem.endTime = endTime
             editingItem.timeZoneGMTOffset = timeZoneOffset
             editingItem.locationName = manualLocation
@@ -1154,7 +1163,7 @@ struct TripDetailView: View {
         } else {
             let item = ItineraryItem(
                 title: manualTitle,
-                startTime: manualStartTime,
+                startTime: startTime,
                 endTime: endTime,
                 timeZoneGMTOffset: timeZoneOffset,
                 locationName: manualLocation,
@@ -1166,6 +1175,7 @@ struct TripDetailView: View {
             )
             trip.items.append(item)
         }
+
 
         showAddItemSheet = false
         editingItem = nil
@@ -1188,9 +1198,10 @@ struct TripDetailView: View {
     private func prepareToEdit(_ item: ItineraryItem) {
         editingItem = item
         manualTitle = item.title
-        manualStartTime = item.startTime
-        manualEndTime = item.endTime ?? item.startTime
+        manualStartTime = toLocalClockDate(item.startTime, offset: item.timeZoneGMTOffset)
+        manualEndTime = toLocalClockDate(item.endTime ?? item.startTime, offset: item.timeZoneGMTOffset)
         manualHasEndTime = item.endTime != nil
+
         manualLocation = item.locationName
         manualProvider = item.provider ?? ""
         manualBookingRef = item.bookingReference ?? ""
@@ -1206,15 +1217,44 @@ struct TripDetailView: View {
 
         isInferringManualTimeZone = true
         Task {
-            let inferred = await ItineraryParserService.shared.inferGMTOffset(from: location, at: manualStartTime)
+            // Use the absolute date for inference
+            let absoluteStart = fromLocalClockDate(manualStartTime, offset: manualTimeZoneGMTOffset)
+            let inferred = await ItineraryParserService.shared.inferGMTOffset(from: location, at: absoluteStart)
             await MainActor.run {
                 if let inferred {
+                    // Update clock date if offset changes to preserve "listed time"
+                    let oldOffset = manualTimeZoneGMTOffset
                     manualTimeZoneGMTOffset = inferred
+                    
+                    // We want to keep the same clock time, but interpreted in the new offset.
+                    // The easiest way is to NOT change manualStartTime/manualEndTime, 
+                    // because they already represent the clock time in the device timezone.
+                    // When we save, fromLocalClockDate will use the NEW offset.
                 }
                 isInferringManualTimeZone = false
             }
         }
     }
+
+    // MARK: - Time Zone Helpers
+
+    private func toLocalClockDate(_ date: Date, offset: String?) -> Date {
+        guard let finalOffset = ItineraryParserService.shared.standardizedGMTOffset(offset),
+              let tz = ItineraryParserService.shared.timeZone(fromGMTOffset: finalOffset) else {
+            return date
+        }
+        let userOffsetString = ItineraryParserService.shared.gmtOffsetString(for: .current, at: date)
+        return ItineraryParserService.shared.recalibratedDate(date, from: tz, to: userOffsetString) ?? date
+    }
+
+    private func fromLocalClockDate(_ date: Date, offset: String?) -> Date {
+        guard let finalOffset = ItineraryParserService.shared.standardizedGMTOffset(offset),
+              let tz = ItineraryParserService.shared.timeZone(fromGMTOffset: finalOffset) else {
+            return date
+        }
+        return ItineraryParserService.shared.recalibratedDate(date, from: .current, to: finalOffset) ?? date
+    }
+
 
     private func reconcileTripTimeZones() async {
         for item in trip.items {

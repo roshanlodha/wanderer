@@ -170,7 +170,36 @@ class ItineraryParserService {
         guard let startRange = full.range(of: "[CONTEXT_TEMPLATE]\n") else {
             return "CONTEXT INFO:\n- The current date is {CURRENT_DATE}."
         }
-        return String(full[startRange.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let afterStart = full[startRange.upperBound...]
+        if let nextSection = afterStart.range(of: "\n[OPENAI_TRIAGE_PROMPT]") {
+            return String(afterStart[..<nextSection.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return String(afterStart).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func promptSection(_ key: String) -> String? {
+        let full = fullPromptFile
+        guard let startRange = full.range(of: "[\(key)]\n") else {
+            return nil
+        }
+
+        let afterStart = full[startRange.upperBound...]
+        if let nextSectionRange = afterStart.range(of: "\n[", options: [.literal]) {
+            return String(afterStart[..<nextSectionRange.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return String(afterStart).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var openAITriagePromptTemplate: String {
+        promptSection("OPENAI_TRIAGE_PROMPT") ?? "You classify travel emails for trip planning. Return strict JSON only.\n\n{CONTEXT}"
+    }
+
+    private var appleTriagePromptTemplate: String {
+        promptSection("APPLE_TRIAGE_PROMPT") ?? "Classify this email for trip planning and return strict JSON with fields relevant and important.\n\n{CONTEXT}\n\nEMAIL:\n{EMAIL}"
+    }
+
+    private var appleJSONEnforcementPrompt: String {
+        promptSection("APPLE_JSON_ENFORCEMENT") ?? "Return exactly one JSON object and nothing else."
     }
     
     /// Builds the dynamic context string by filling in the template placeholders
@@ -589,18 +618,8 @@ class ItineraryParserService {
             ]
         ]
 
-        let triageSystemPrompt = """
-        You classify travel emails for trip planning.
-        Return strict JSON only.
-
-        Definitions:
-        - relevant=true when the email is travel-related for the user's trip context.
-        - important=true only when the email is travel-related but does NOT contain concrete itinerary event details suitable for timeline extraction.
-        - If relevant=false, important must be false.
-        - Itinerary confirmations (flight, train, bus, hotel, booking confirmations with dates/times/locations) should be relevant=true and important=false.
-
-        \(contextText)
-        """
+        let triageSystemPrompt = openAITriagePromptTemplate
+            .replacingOccurrences(of: "{CONTEXT}", with: contextText)
 
         let body: [String: Any] = [
             "model": modelString,
@@ -670,31 +689,19 @@ class ItineraryParserService {
         if #available(iOS 18.0, macOS 15.0, macCatalyst 26.0, *) {
             let session = LanguageModelSession()
             let truncatedText = String(text.prefix(1800))
-            let prompt = """
-            Classify this email for trip planning.
-            Return strict JSON only with this exact schema:
-            {"relevant": boolean, "important": boolean}
-
-            Rules:
-            - If relevant is false, important must be false.
-            - Set important true only when travel-related but not a concrete itinerary event email.
-            - Flight/train/bus/hotel confirmations with actionable dates/times/locations are relevant true and important false.
-
-            \(contextText)
-
-            EMAIL:
-            \(truncatedText)
-            """
+            let prompt = appleTriagePromptTemplate
+                .replacingOccurrences(of: "{CONTEXT}", with: contextText)
+                .replacingOccurrences(of: "{EMAIL}", with: truncatedText)
+                + "\n\n"
+                + appleJSONEnforcementPrompt
 
             let response = try await session.respond(to: prompt)
             let contentString = response.content
 
-            guard let start = contentString.firstIndex(of: "{"),
-                  let end = contentString.lastIndex(of: "}") else {
+            guard let jsonString = extractJSONObjectString(from: contentString) else {
                 throw ParserError.parsingError("Apple Intelligence classification response was not JSON")
             }
 
-            let jsonString = String(contentString[start...end])
             guard let contentData = jsonString.data(using: .utf8) else {
                 throw ParserError.parsingError("Could not decode Apple Intelligence classification response")
             }
@@ -842,6 +849,58 @@ class ItineraryParserService {
     }
     
     // MARK: - Apple Intelligence
+
+    private func extractJSONObjectString(from text: String) -> String? {
+        // Fast path: whole response is already valid JSON.
+        if let fullData = text.data(using: .utf8),
+           let object = try? JSONSerialization.jsonObject(with: fullData),
+           JSONSerialization.isValidJSONObject(object),
+           let normalizedData = try? JSONSerialization.data(withJSONObject: object),
+           let normalized = String(data: normalizedData, encoding: .utf8) {
+            return normalized
+        }
+
+        guard let start = text.firstIndex(of: "{") else { return nil }
+        var depth = 0
+        var inString = false
+        var isEscaped = false
+
+        var idx = start
+        while idx < text.endIndex {
+            let ch = text[idx]
+
+            if inString {
+                if isEscaped {
+                    isEscaped = false
+                } else if ch == "\\" {
+                    isEscaped = true
+                } else if ch == "\"" {
+                    inString = false
+                }
+                idx = text.index(after: idx)
+                continue
+            }
+
+            if ch == "\"" {
+                inString = true
+                idx = text.index(after: idx)
+                continue
+            }
+
+            if ch == "{" {
+                depth += 1
+            } else if ch == "}" {
+                depth -= 1
+                if depth == 0 {
+                    return String(text[start...idx])
+                }
+            }
+
+            idx = text.index(after: idx)
+        }
+
+        return nil
+    }
     
     private func parseWithAppleIntelligence(text: String, systemPrompt: String) async throws -> ExtractionResult {
         #if canImport(FoundationModels)
@@ -871,7 +930,7 @@ class ItineraryParserService {
             // Hard cap at 1500 chars for Apple Intelligence (much smaller context window)
             let truncatedText = String(text.prefix(1500))
             
-            let aiPrompt = "\(condensedSystemPrompt)\n\(contextLine)\n\nEMAIL:\n\(truncatedText)"
+            let aiPrompt = "\(condensedSystemPrompt)\n\(contextLine)\n\nEMAIL:\n\(truncatedText)\n\n\(appleJSONEnforcementPrompt)"
             
             print("[AppleIntelligence] Prompt length: \(aiPrompt.count) chars")
             
@@ -879,14 +938,11 @@ class ItineraryParserService {
                 let response = try await session.respond(to: aiPrompt)
                 let contentString = response.content
                 
-                // Look for JSON object or array
-                guard let start = contentString.firstIndex(of: "{") ?? contentString.firstIndex(of: "["),
-                      let end = contentString.lastIndex(of: "}") ?? contentString.lastIndex(of: "]") else {
+                guard let jsonString = extractJSONObjectString(from: contentString) else {
                     print("[AppleIntelligence] No JSON found in response, returning empty.")
                     return ExtractionResult(relevant: false, items: [])
                 }
-                
-                let jsonString = String(contentString[start...end])
+
                 guard let contentData = jsonString.data(using: .utf8) else {
                     throw ParserError.parsingError("Failed to decode extracted string to Data.")
                 }
@@ -938,32 +994,145 @@ class ItineraryParserService {
         #endif
     }
     
+    private func inferredTravelMode(from lowercasedText: String) -> TravelMode? {
+        if lowercasedText.contains("hotel") || lowercasedText.contains("check-in") || lowercasedText.contains("airbnb") {
+            return .hotel
+        }
+        if lowercasedText.contains("flight") || lowercasedText.contains("airline") || lowercasedText.contains("boarding") {
+            return .flight
+        }
+        if lowercasedText.contains("train") || lowercasedText.contains("rail") {
+            return .train
+        }
+        if lowercasedText.contains("bus") || lowercasedText.contains("coach") {
+            return .bus
+        }
+        if lowercasedText.contains("reservation") || lowercasedText.contains("booking") || lowercasedText.contains("ticket") || lowercasedText.contains("event") {
+            return .activity
+        }
+        return nil
+    }
+
+    private func firstDetectedDateRange(in text: String) -> (Date, Date?)? {
+        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.date.rawValue) else {
+            return nil
+        }
+
+        let nsText = text as NSString
+        let matches = detector.matches(in: text, options: [], range: NSRange(location: 0, length: nsText.length))
+        guard let first = matches.first, let date = first.date else {
+            return nil
+        }
+        return (date, first.duration > 0 ? date.addingTimeInterval(first.duration) : nil)
+    }
+
+    private func extractGMTOffset(in text: String) -> String? {
+        let pattern = "(?i)(?:gmt|utc)\\s*([+-]\\d{1,2}(?::?\\d{2})?)"
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            return nil
+        }
+
+        let nsText = text as NSString
+        let range = NSRange(location: 0, length: nsText.length)
+        guard let match = regex.firstMatch(in: text, options: [], range: range), match.numberOfRanges > 1 else {
+            return nil
+        }
+
+        let raw = nsText.substring(with: match.range(at: 1))
+        if raw.count > 3 && !raw.contains(":") {
+            let sign = raw.prefix(1)
+            let remaining = raw.dropFirst()
+            if remaining.count == 4 {
+                let hh = remaining.prefix(2)
+                let mm = remaining.suffix(2)
+                return standardizedGMTOffset("\(sign)\(hh):\(mm)")
+            }
+        }
+
+        return standardizedGMTOffset(raw)
+    }
+
+    private func extractLikelyLocation(in text: String) -> String {
+        let pattern = "(?i)(?:at|in|to)\\s+([A-Z][A-Za-z0-9,.\\-\\s]{2,80})"
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            return "Unknown Location"
+        }
+
+        let nsText = text as NSString
+        let range = NSRange(location: 0, length: nsText.length)
+        guard let match = regex.firstMatch(in: text, options: [], range: range), match.numberOfRanges > 1 else {
+            return "Unknown Location"
+        }
+
+        let location = nsText.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
+        return location.isEmpty ? "Unknown Location" : location
+    }
+
+    private func heuristicLocalExtraction(from text: String, tripStartDate: Date?) -> ExtractionResult {
+        let lower = text.lowercased()
+
+        guard let inferredMode = inferredTravelMode(from: lower) else {
+            return ExtractionResult(relevant: false, items: [])
+        }
+
+        let dateRange = firstDetectedDateRange(in: text)
+        let offset = extractGMTOffset(in: text) ?? standardizedGMTOffset(
+            gmtOffsetString(for: .current, at: tripStartDate ?? Date())
+        )
+        let location = extractLikelyLocation(in: text)
+
+        let startDate = dateRange?.0 ?? (tripStartDate ?? Date())
+        var endDate = dateRange?.1
+
+        if inferredMode == .hotel {
+            if endDate == nil {
+                endDate = startDate.addingTimeInterval(20 * 3600)
+            }
+        } else if endDate == nil {
+            endDate = startDate.addingTimeInterval(2 * 3600)
+        }
+
+        let item = ExtractedItineraryItem(
+            title: titleForHeuristicItem(mode: inferredMode, location: location),
+            startTime: startDate,
+            endTime: endDate,
+            timeZoneGMTOffset: offset,
+            locationName: location,
+            provider: nil,
+            bookingReference: nil,
+            alternativeReference: nil,
+            travelMode: inferredMode.rawValue,
+            notes: "Extracted with local MLX fallback parser"
+        )
+
+        return ExtractionResult(relevant: true, items: [item])
+    }
+
+    private func titleForHeuristicItem(mode: TravelMode, location: String) -> String {
+        switch mode {
+        case .hotel:
+            return "Check-in: \(location)"
+        case .flight:
+            return "Flight to \(location)"
+        case .train:
+            return "Train to \(location)"
+        case .bus:
+            return "Bus to \(location)"
+        case .activity:
+            return "Activity at \(location)"
+        case .document:
+            return "Document: \(location)"
+        case .other:
+            return "Travel event: \(location)"
+        }
+    }
+
     // MARK: - MLX
     
     #if canImport(MLX)
     private func parseWithLocalMLX(text: String, systemPrompt: String, tripStartDate: Date?) async throws -> ExtractionResult {
-        // Finalized MLX Swift Port Structure
-        print("[ItineraryParserService] Initializing MLX Swift Engine...")
-        
-        // Simulating the MLX computation time and generating a robust fallback for the demo
-        try await Task.sleep(nanoseconds: 2_000_000_000)
-        
-        let baseDate = tripStartDate ?? Date()
-        
-        let dummyItem = ExtractedItineraryItem(
-            title: "MLX Processed Flight",
-            startTime: baseDate.addingTimeInterval(3600 * 12),
-            endTime: baseDate.addingTimeInterval(3600 * 14),
-            timeZoneGMTOffset: "+0",
-            locationName: "Local LLM Port",
-            provider: "MLX Local",
-            bookingReference: "MLX-SWIFT-1",
-            alternativeReference: nil,
-            travelMode: "Flight",
-            notes: nil
-        )
-        
-        return ExtractionResult(relevant: true, items: [dummyItem])
+        print("[ItineraryParserService] Running MLX local parser fallback...")
+        return heuristicLocalExtraction(from: text, tripStartDate: tripStartDate)
     }
     #else
     private func parseWithLocalMLX(text: String, systemPrompt: String, tripStartDate: Date?) async throws -> ExtractionResult {

@@ -2,18 +2,32 @@ import SwiftUI
 import SwiftData
 
 struct TimelineItemView: View {
+    /// Returns the event's own local timezone, falling back to UTC (not device local) to avoid
+    /// silently converting times to the viewer's zone when the event zone is unknown.
+    private func eventTimeZone(for item: ItineraryItem) -> TimeZone {
+        ItineraryParserService.shared.timeZone(fromGMTOffset: item.timeZoneGMTOffset) ?? TimeZone(secondsFromGMT: 0)!
+    }
+
+    private func formattedTime(_ date: Date, item: ItineraryItem) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "h:mm a"
+        formatter.timeZone = eventTimeZone(for: item)
+        return formatter.string(from: date)
+    }
+
     let item: ItineraryItem
     @State private var isExpanded = false
     
     var body: some View {
         HStack(alignment: .top, spacing: 16) {
-            // Time column
+            // Time column — always shown in the event's own local timezone
             VStack(alignment: .trailing, spacing: 2) {
-                Text(item.startTime, format: .dateTime.hour().minute())
+                Text(formattedTime(item.startTime, item: item))
                     .font(.subheadline)
                     .fontWeight(.bold)
                 if let endTime = item.endTime {
-                    Text(endTime, format: .dateTime.hour().minute())
+                    Text(formattedTime(endTime, item: item))
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
