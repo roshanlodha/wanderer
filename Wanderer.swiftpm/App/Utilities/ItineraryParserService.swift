@@ -478,7 +478,7 @@ class ItineraryParserService {
             
             let aiPrompt = "\(condensedSystemPrompt)\n\(contextLine)\n\nEMAIL:\n\(truncatedText)"
             
-            print("[AppleIntelligence] Prompt length: \(prompt.count) chars")
+            print("[AppleIntelligence] Prompt length: \(aiPrompt.count) chars")
             
             do {
                 let response = try await session.respond(to: aiPrompt)

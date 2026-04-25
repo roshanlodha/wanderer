@@ -8,8 +8,15 @@ struct AddTripView: View {
     @State private var name: String = ""
     @State private var startDate: Date = Date()
     @State private var endDate: Date = Date().addingTimeInterval(86400 * 7)
-    @State private var emailSearchStartDate: Date = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
-    @State private var emailSearchEndDate: Date = Calendar.current.date(byAdding: .day, value: 14, to: Date()) ?? Date()
+    @State private var emailSearchStartDate: Date?
+    @State private var emailSearchEndDate: Date?
+    
+    var computedEmailSearchStartDate: Date {
+        emailSearchStartDate ?? (Calendar.current.date(byAdding: .day, value: -7, to: startDate) ?? startDate)
+    }
+    var computedEmailSearchEndDate: Date {
+        emailSearchEndDate ?? (Calendar.current.date(byAdding: .day, value: 7, to: endDate) ?? endDate)
+    }
     
     var body: some View {
         NavigationStack {
@@ -19,17 +26,23 @@ struct AddTripView: View {
                 DatePicker("End Date", selection: $endDate, in: startDate..., displayedComponents: .date)
 
                 Section("Email Search Date Range") {
-                    DatePicker("Search Start", selection: $emailSearchStartDate, displayedComponents: .date)
-                    DatePicker("Search End", selection: $emailSearchEndDate, in: emailSearchStartDate..., displayedComponents: .date)
+                    DatePicker("Search Start", selection: Binding(
+                        get: { emailSearchStartDate ?? computedEmailSearchStartDate },
+                        set: { emailSearchStartDate = $0 }
+                    ), displayedComponents: .date)
+                    DatePicker("Search End", selection: Binding(
+                        get: { emailSearchEndDate ?? computedEmailSearchEndDate },
+                        set: { emailSearchEndDate = $0 }
+                    ), in: (emailSearchStartDate ?? computedEmailSearchStartDate)..., displayedComponents: .date)
                 }
             }
             .onChange(of: startDate) { _, newValue in
-                if emailSearchStartDate > newValue {
+                if let current = emailSearchStartDate, current > newValue {
                     emailSearchStartDate = newValue
                 }
             }
             .onChange(of: endDate) { _, newValue in
-                if emailSearchEndDate < newValue {
+                if let current = emailSearchEndDate, current < newValue {
                     emailSearchEndDate = newValue
                 }
             }
@@ -47,8 +60,8 @@ struct AddTripView: View {
                             name: name,
                             startDate: startDate,
                             endDate: endDate,
-                            emailSearchStartDate: emailSearchStartDate,
-                            emailSearchEndDate: emailSearchEndDate
+                            emailSearchStartDate: emailSearchStartDate ?? computedEmailSearchStartDate,
+                            emailSearchEndDate: emailSearchEndDate ?? computedEmailSearchEndDate
                         )
                         modelContext.insert(trip)
                         dismiss()

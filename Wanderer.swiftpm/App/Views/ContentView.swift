@@ -15,11 +15,6 @@ struct ContentView: View {
                 ContentUnavailableView("Select a Trip", systemImage: "map", description: Text("Choose a trip from the sidebar to view its itinerary."))
             }
         }
-        .keyboardShortcut(",", modifiers: .command)
-        .onKeyPress(.command(",")) { press in
-            showSettings.toggle()
-            return .handled
-        }
         .sheet(isPresented: $showSettings) {
             SettingsView()
         }

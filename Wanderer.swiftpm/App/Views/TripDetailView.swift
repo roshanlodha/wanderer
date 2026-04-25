@@ -761,8 +761,12 @@ struct TripDetailView: View {
     }
 
     private var effectiveEmailSearchRange: (start: Date, end: Date) {
-        let start = Calendar.current.startOfDay(for: trip.emailSearchStartDate ?? trip.startDate)
-        let endBase = Calendar.current.startOfDay(for: trip.emailSearchEndDate ?? trip.endDate)
+        // Default to trip dates with 7-day buffer on each side if not explicitly set
+        let searchStart = trip.emailSearchStartDate ?? (Calendar.current.date(byAdding: .day, value: -7, to: trip.startDate) ?? trip.startDate)
+        let searchEnd = trip.emailSearchEndDate ?? (Calendar.current.date(byAdding: .day, value: 7, to: trip.endDate) ?? trip.endDate)
+        
+        let start = Calendar.current.startOfDay(for: searchStart)
+        let endBase = Calendar.current.startOfDay(for: searchEnd)
         let end = endBase.addingTimeInterval(86400 - 1)
         return (start, end)
     }
