@@ -26,7 +26,35 @@ struct TripDetailView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 0) {
-                if trip.items.isEmpty && fetchedEmails.isEmpty {
+                if isSyncing {
+                    VStack(spacing: 12) {
+                        HStack {
+                            Text("Syncing Emails...")
+                                .font(.subheadline)
+                                .fontWeight(.semibold)
+                            Spacer()
+                            Text("\(Int(syncProgress)) / \(Int(syncTotal))")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        ProgressView(value: syncProgress, total: max(1, syncTotal))
+                            .tint(.blue)
+                        
+                        Text(syncStatus)
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding()
+                    .background(Color(.secondarySystemGroupedBackground))
+                    .cornerRadius(12)
+                    .shadow(color: .black.opacity(0.05), radius: 5, x: 0, y: 2)
+                    .padding(.horizontal)
+                    .padding(.vertical, 32)
+                }
+                
+                if !isSyncing && trip.items.isEmpty && fetchedEmails.isEmpty {
                     ContentUnavailableView {
                         Label("No Itinerary", systemImage: "calendar.badge.plus")
                     } description: {
@@ -66,34 +94,6 @@ struct TripDetailView: View {
                                     }
                             }
                         }
-                    }
-                    
-                    if isSyncing {
-                        VStack(spacing: 12) {
-                            HStack {
-                                Text("Syncing Emails...")
-                                    .font(.subheadline)
-                                    .fontWeight(.semibold)
-                                Spacer()
-                                Text("\(Int(syncProgress)) / \(Int(syncTotal))")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                            
-                            ProgressView(value: syncProgress, total: max(1, syncTotal))
-                                .tint(.blue)
-                            
-                            Text(syncStatus)
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        .padding()
-                        .background(Color(.secondarySystemGroupedBackground))
-                        .cornerRadius(12)
-                        .shadow(color: .black.opacity(0.05), radius: 5, x: 0, y: 2)
-                        .padding(.horizontal)
-                        .padding(.vertical, 8)
                     }
                     
                     // Fetched email previews (before they're converted to itinerary items)
@@ -180,6 +180,12 @@ struct TripDetailView: View {
         syncError = nil
         
         Task {
+            await MainActor.run {
+                syncStatus = "Fetching travel emails..."
+                syncTotal = 1
+                syncProgress = 0
+            }
+            
             let allEmails = await EmailFetchService.shared.fetchTravelEmails()
             // Filter out forwarded emails as requested by user
             let emails = allEmails.filter { 
@@ -188,6 +194,7 @@ struct TripDetailView: View {
             }
             
             await MainActor.run {
+                syncStatus = "Identifying emails..."
                 syncTotal = Double(max(1, emails.count))
                 syncProgress = 0
             }
@@ -204,8 +211,10 @@ struct TripDetailView: View {
                     for item in extracted {
                         // Check if the item's time overlaps with the trip's dates
                         // We add a 1 day buffer to account for time zones / overnight travel
-                        let paddedStart = Calendar.current.date(byAdding: .day, value: -1, to: trip.startDate) ?? trip.startDate
-                        let paddedEnd = Calendar.current.date(byAdding: .day, value: 1, to: trip.endDate) ?? trip.endDate
+                        let startOfDay = Calendar.current.startOfDay(for: trip.startDate)
+                        let endOfDay = Calendar.current.startOfDay(for: trip.endDate).addingTimeInterval(86400 - 1)
+                        let paddedStart = Calendar.current.date(byAdding: .day, value: -1, to: startOfDay) ?? startOfDay
+                        let paddedEnd = Calendar.current.date(byAdding: .day, value: 1, to: endOfDay) ?? endOfDay
                         
                         let itemEndTime = item.endTime ?? item.startTime
                         if item.startTime <= paddedEnd && itemEndTime >= paddedStart {

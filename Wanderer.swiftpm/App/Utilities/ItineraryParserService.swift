@@ -182,6 +182,19 @@ class ItineraryParserService {
             if let date = formatter.date(from: dateString) {
                 return date
             }
+            
+            // Support ISO8601 without timezone (local time)
+            formatter.formatOptions = [.withYear, .withMonth, .withDay, .withTime, .withDashSeparatorInDate, .withColonSeparatorInTime]
+            if let date = formatter.date(from: dateString) {
+                return date
+            }
+            
+            let fallback = DateFormatter()
+            fallback.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
+            if let date = fallback.date(from: dateString) {
+                return date
+            }
+            
             throw DecodingError.dataCorruptedError(in: container, debugDescription: "Cannot decode date string \(dateString)")
         }
         
@@ -220,8 +233,17 @@ class ItineraryParserService {
                     let dateString = try container.decode(String.self)
                     let formatter = ISO8601DateFormatter()
                     if let date = formatter.date(from: dateString) { return date }
+                    
                     formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
                     if let date = formatter.date(from: dateString) { return date }
+                    
+                    formatter.formatOptions = [.withYear, .withMonth, .withDay, .withTime, .withDashSeparatorInDate, .withColonSeparatorInTime]
+                    if let date = formatter.date(from: dateString) { return date }
+                    
+                    let fallback = DateFormatter()
+                    fallback.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
+                    if let date = fallback.date(from: dateString) { return date }
+                    
                     throw DecodingError.dataCorruptedError(in: container, debugDescription: "Invalid date: \(dateString)")
                 }
                 
