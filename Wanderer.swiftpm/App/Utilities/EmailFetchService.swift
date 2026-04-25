@@ -69,6 +69,10 @@ class EmailFetchService {
     ]
     
     private let keychain = KeychainManager.shared
+    private let emailRegex = try? NSRegularExpression(
+        pattern: "[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}",
+        options: [.caseInsensitive]
+    )
     
     // MARK: - Public API
     
@@ -76,9 +80,13 @@ class EmailFetchService {
     /// This ONLY fetches — no extraction happens here.
     func fetchTravelEmails() async -> [FetchedEmail] {
         var allEmails: [FetchedEmail] = []
+        var connectedAccountEmails = Set<String>()
         
         if let googleToken = keychain.get(forKey: .googleAccessToken) {
             do {
+                if let accountEmail = try await fetchGoogleAccountEmail(accessToken: googleToken) {
+                    connectedAccountEmails.insert(accountEmail)
+                }
                 let emails = try await fetchGmailTravelEmails(
                     accessToken: googleToken
                 )
@@ -91,6 +99,9 @@ class EmailFetchService {
         
         if let msToken = keychain.get(forKey: .microsoftAccessToken) {
             do {
+                if let accountEmail = try await fetchMicrosoftAccountEmail(accessToken: msToken) {
+                    connectedAccountEmails.insert(accountEmail)
+                }
                 let emails = try await fetchMicrosoftTravelEmails(
                     accessToken: msToken
                 )
@@ -109,9 +120,15 @@ class EmailFetchService {
         let filtered = allEmails.filter { email in
             let senderLower = email.sender.lowercased()
             let subjectLower = email.subject.lowercased()
+            let senderAddress = normalizedEmailAddress(from: email.sender)
             
             // Exclude forwarded emails
             if subjectLower.hasPrefix("fwd:") || subjectLower.hasPrefix("fw:") {
+                return false
+            }
+
+            // Exclude emails sent by the currently connected account(s)
+            if let senderAddress, connectedAccountEmails.contains(senderAddress) {
                 return false
             }
             
@@ -127,6 +144,50 @@ class EmailFetchService {
         
         print("[EmailFetchService] After filtering: \(filtered.count) emails (removed \(allEmails.count - filtered.count) non-travel)")
         return filtered
+    }
+
+    private func normalizedEmailAddress(from rawValue: String) -> String? {
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let nsRange = NSRange(trimmed.startIndex..<trimmed.endIndex, in: trimmed)
+        if let match = emailRegex?.firstMatch(in: trimmed, options: [], range: nsRange),
+           let range = Range(match.range, in: trimmed) {
+            return trimmed[range].lowercased()
+        }
+
+        return trimmed.contains("@") ? trimmed.lowercased() : nil
+    }
+
+    private func fetchGoogleAccountEmail(accessToken: String) async throws -> String? {
+        let url = URL(string: "https://gmail.googleapis.com/gmail/v1/users/me/profile")!
+        let request = makeAuthorizedRequest(url: url, token: accessToken)
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        try validateHTTPResponse(response, data: data, context: "Gmail profile")
+
+        struct GmailProfile: Codable {
+            let emailAddress: String
+        }
+
+        let profile = try JSONDecoder().decode(GmailProfile.self, from: data)
+        return normalizedEmailAddress(from: profile.emailAddress)
+    }
+
+    private func fetchMicrosoftAccountEmail(accessToken: String) async throws -> String? {
+        let url = URL(string: "https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName")!
+        let request = makeAuthorizedRequest(url: url, token: accessToken)
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        try validateHTTPResponse(response, data: data, context: "Microsoft profile")
+
+        struct MicrosoftProfile: Codable {
+            let mail: String?
+            let userPrincipalName: String?
+        }
+
+        let profile = try JSONDecoder().decode(MicrosoftProfile.self, from: data)
+        return normalizedEmailAddress(from: profile.mail ?? profile.userPrincipalName ?? "")
     }
     
     // MARK: - Gmail REST API
