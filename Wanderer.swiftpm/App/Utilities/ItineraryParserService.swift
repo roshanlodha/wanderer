@@ -262,16 +262,24 @@ class ItineraryParserService {
 
     /// Classify a fetched email as itinerary candidate, important non-itinerary, or irrelevant.
     func classifyEmailForSearch(emailText: String, tripStartDate: Date? = nil, tripEndDate: Date? = nil) async throws -> EmailTriageResult {
-        let engine = UserDefaults.standard.string(forKey: "extractionEngine") ?? "Cloud (OpenAI)"
+        let engine = UserDefaults.standard.string(forKey: "classificationEngine") ?? "Apple Intelligence"
         let contextText = buildContext(tripStartDate: tripStartDate, tripEndDate: tripEndDate)
         let cleanedText = preprocessEmailText(emailText, maxChars: 4000)
 
         if engine == "Cloud (OpenAI)" {
             return try await classifyWithOpenAI(text: cleanedText, contextText: contextText)
+        } else if engine == "Apple Intelligence" {
+            return try await classifyWithAppleIntelligence(text: cleanedText, contextText: contextText)
         }
 
-        // Fallback path for non-OpenAI engines: use full parse signal.
-        let parsed = try await parse(emailText: cleanedText, tripStartDate: tripStartDate, tripEndDate: tripEndDate)
+        // Fallback path for local engines: use extraction-style relevance and infer importance.
+        let dynamicPrompt = "\(baseSystemPrompt)\n\n\(contextText)"
+        #if canImport(MLX)
+        let parsed = try await parseWithLocalMLX(text: cleanedText, systemPrompt: dynamicPrompt, tripStartDate: tripStartDate)
+        #else
+        let parsed = try await parseWithOpenAI(text: cleanedText, systemPrompt: dynamicPrompt)
+        #endif
+
         return EmailTriageResult(relevant: parsed.relevant, important: parsed.relevant && parsed.items.isEmpty)
     }
     
@@ -334,7 +342,22 @@ class ItineraryParserService {
     // MARK: - OpenAI
 
     private func selectedOpenAIModel() -> String {
-        let cloudModelSelection = UserDefaults.standard.string(forKey: "cloudModelSelection") ?? "Nano"
+        let cloudModelSelection = UserDefaults.standard.string(forKey: "extractionCloudModelSelection")
+            ?? UserDefaults.standard.string(forKey: "cloudModelSelection")
+            ?? "Nano"
+        switch cloudModelSelection {
+        case "Mini": return "gpt-5-mini"
+        case "SOTA": return "gpt-5.5"
+        case "Nano": fallthrough
+        default: return "gpt-5-nano"
+        }
+    }
+
+    private func selectedClassificationOpenAIModel() -> String {
+        let cloudModelSelection = UserDefaults.standard.string(forKey: "classificationCloudModelSelection")
+            ?? UserDefaults.standard.string(forKey: "extractionCloudModelSelection")
+            ?? UserDefaults.standard.string(forKey: "cloudModelSelection")
+            ?? "Nano"
         switch cloudModelSelection {
         case "Mini": return "gpt-5-mini"
         case "SOTA": return "gpt-5.5"
@@ -348,7 +371,7 @@ class ItineraryParserService {
             throw ParserError.invalidAPIKey
         }
 
-        let modelString = selectedOpenAIModel()
+        let modelString = selectedClassificationOpenAIModel()
         let url = URL(string: "https://api.openai.com/v1/chat/completions")!
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -447,6 +470,52 @@ class ItineraryParserService {
         } catch {
             throw ParserError.parsingError("Failed to decode triage response: \(error.localizedDescription)")
         }
+    }
+
+    private func classifyWithAppleIntelligence(text: String, contextText: String) async throws -> EmailTriageResult {
+        #if canImport(FoundationModels)
+        if #available(iOS 18.0, macOS 15.0, macCatalyst 26.0, *) {
+            let session = LanguageModelSession()
+            let truncatedText = String(text.prefix(1800))
+            let prompt = """
+            Classify this email for trip planning.
+            Return strict JSON only with this exact schema:
+            {"relevant": boolean, "important": boolean}
+
+            Rules:
+            - If relevant is false, important must be false.
+            - Set important true only when travel-related but not a concrete itinerary event email.
+            - Flight/train/bus/hotel confirmations with actionable dates/times/locations are relevant true and important false.
+
+            \(contextText)
+
+            EMAIL:
+            \(truncatedText)
+            """
+
+            let response = try await session.respond(to: prompt)
+            let contentString = response.content
+
+            guard let start = contentString.firstIndex(of: "{"),
+                  let end = contentString.lastIndex(of: "}") else {
+                throw ParserError.parsingError("Apple Intelligence classification response was not JSON")
+            }
+
+            let jsonString = String(contentString[start...end])
+            guard let contentData = jsonString.data(using: .utf8) else {
+                throw ParserError.parsingError("Could not decode Apple Intelligence classification response")
+            }
+
+            let triage = try JSONDecoder().decode(EmailTriageResult.self, from: contentData)
+            if !triage.relevant {
+                return EmailTriageResult(relevant: false, important: false)
+            }
+            return triage
+        }
+        throw ParserError.missingEngine
+        #else
+        throw ParserError.missingEngine
+        #endif
     }
     
     private func parseWithOpenAI(text: String, systemPrompt: String) async throws -> ExtractionResult {

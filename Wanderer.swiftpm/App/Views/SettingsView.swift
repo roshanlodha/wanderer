@@ -16,7 +16,10 @@ struct SettingsView: View {
     
     // AI Settings
     @AppStorage("extractionEngine") private var extractionEngine: String = "Cloud (OpenAI)"
-    @AppStorage("cloudModelSelection") private var cloudModelSelection: String = "Nano"
+    @AppStorage("extractionCloudModelSelection") private var extractionCloudModelSelection: String = "Nano"
+    @AppStorage("classificationMode") private var classificationMode: String = "Smart"
+    @AppStorage("classificationEngine") private var classificationEngine: String = "Apple Intelligence"
+    @AppStorage("classificationCloudModelSelection") private var classificationCloudModelSelection: String = "Nano"
     @State private var openAIApiKey: String = ""
     
     var body: some View {
@@ -60,7 +63,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Email Sync")
                 } footer: {
-                    Text("Connect your email to automatically import travel reservations. Emails are only fetched for trips you create, within the trip's date range.")
+                    Text("Connect your email to automatically import travel reservations. Emails are filtered using each trip's Ignore Emails Before date.")
                 }
                 
                 // MARK: - AI Settings
@@ -73,25 +76,62 @@ struct SettingsView: View {
                     .pickerStyle(.segmented)
                     
                     if extractionEngine == "Cloud (OpenAI)" {
-                        Picker("Cloud Model", selection: $cloudModelSelection) {
+                        Picker("Extraction Model", selection: $extractionCloudModelSelection) {
                             Text("Mini").tag("Mini")
                             Text("Nano").tag("Nano")
                             Text("SOTA").tag("SOTA")
                         }
-                        
-                        SecureField("OpenAI API Key", text: $openAIApiKey)
-                            .onChange(of: openAIApiKey) { _, newValue in
-                                KeychainManager.shared.save(newValue, forKey: .openAIApiKey)
-                            }
                     }
                 } header: {
-                    Text("Intelligence")
+                    Text("Extraction")
                 } footer: {
                     if extractionEngine == "Apple Intelligence" {
                         Text("Warning: Apple Intelligence has a limited context window. Large emails will be truncated and may lead to parsing errors.")
                             .foregroundColor(.orange)
                     } else {
                         Text("Select where your emails are processed to extract itinerary details.")
+                    }
+                }
+
+                Section {
+                    Picker("Classification Mode", selection: $classificationMode) {
+                        Text("Fast").tag("Fast")
+                        Text("Smart").tag("Smart")
+                    }
+                    .pickerStyle(.segmented)
+
+                    if classificationMode == "Smart" {
+                        Picker("Classification Engine", selection: $classificationEngine) {
+                            Text("Apple Intelligence").tag("Apple Intelligence")
+                            Text("Cloud (OpenAI)").tag("Cloud (OpenAI)")
+                            Text("Local (MLX)").tag("Local (MLX)")
+                        }
+                        .pickerStyle(.segmented)
+
+                        if classificationEngine == "Cloud (OpenAI)" {
+                            Picker("Classification Model", selection: $classificationCloudModelSelection) {
+                                Text("Mini").tag("Mini")
+                                Text("Nano").tag("Nano")
+                                Text("SOTA").tag("SOTA")
+                            }
+                        }
+                    }
+
+                    if extractionEngine == "Cloud (OpenAI)" || (classificationMode == "Smart" && classificationEngine == "Cloud (OpenAI)") {
+                        SecureField("OpenAI API Key", text: $openAIApiKey)
+                            .onChange(of: openAIApiKey) { _, newValue in
+                                KeychainManager.shared.save(newValue, forKey: .openAIApiKey)
+                            }
+                    }
+                } header: {
+                    Text("Email Classification")
+                } footer: {
+                    if classificationMode == "Fast" {
+                        Text("Fast mode skips AI classification and puts all fetched emails into Detected Emails.")
+                    } else if classificationEngine == "Apple Intelligence" {
+                        Text("Smart mode uses on-device Apple Intelligence by default for lightweight local classification.")
+                    } else {
+                        Text("Smart mode uses AI to split emails into Detected vs Important and filter out non-trip emails.")
                     }
                 }
                 
@@ -114,6 +154,10 @@ struct SettingsView: View {
             }
             .onAppear {
                 refreshConnectionState()
+                if UserDefaults.standard.string(forKey: "extractionCloudModelSelection") == nil,
+                   let legacy = UserDefaults.standard.string(forKey: "cloudModelSelection") {
+                    extractionCloudModelSelection = legacy
+                }
                 if let key = KeychainManager.shared.get(forKey: .openAIApiKey) {
                     openAIApiKey = key
                 }

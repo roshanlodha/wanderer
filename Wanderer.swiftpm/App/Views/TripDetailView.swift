@@ -20,6 +20,7 @@ struct TripDetailView: View {
     @State private var showAddItemSheet = false
     @State private var extractionTask: Task<Void, Never>?
     @State private var showTripSettingsSheet = false
+    @AppStorage("classificationMode") private var classificationMode: String = "Smart"
     
     // Manual add form state
     @State private var manualTitle = ""
@@ -776,6 +777,33 @@ struct TripDetailView: View {
             let secondPass = applySecondPassItineraryFilter(emails)
             let keptAfterDate = secondPass.kept.filter { !isIgnoredByDateFilter($0) }
             let ignoredBeforeCount = secondPass.kept.count - keptAfterDate.count
+
+            if classificationMode == "Fast" {
+                let itinerary = keptAfterDate.sorted { $0.date > $1.date }
+
+                await MainActor.run {
+                    fetchedEmails = itinerary
+                    importantEmails = []
+                    emailStatuses = [:]
+                    for email in itinerary {
+                        emailStatuses[email.id] = .pending
+                    }
+                    isFetchingEmails = false
+
+                    if emails.isEmpty {
+                        syncError = "No travel-related emails found. Try connecting an email account in Settings or check that you have travel confirmation emails."
+                    } else {
+                        var statusParts: [String] = []
+                        statusParts.append("Mode: Fast")
+                        statusParts.append("Itinerary: \(itinerary.count)")
+                        if ignoredBeforeCount > 0 { statusParts.append("Ignored before date: \(ignoredBeforeCount)") }
+                        if secondPass.removedCount > 0 { statusParts.append("FW removed: \(secondPass.removedCount)") }
+                        syncStatus = statusParts.joined(separator: " · ")
+                        print("[TripDetailView] Ignore emails before: \(effectiveIgnoreEmailsBefore)")
+                    }
+                }
+                return
+            }
 
             await MainActor.run {
                 syncStatus = "Classifying \(keptAfterDate.count) emails with AI..."
