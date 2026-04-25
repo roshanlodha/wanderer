@@ -201,20 +201,23 @@ struct TripDetailView: View {
             
             // Extract itinerary items from fetched emails
             var newItems: [ItineraryItem] = []
+            var parseErrorCount = 0
+            var totalExtractedBeforeFilter = 0
             for (index, email) in emails.enumerated() {
                 await MainActor.run {
                     syncStatus = "Parsing email \(index + 1) of \(emails.count)..."
                 }
                 do {
                     let extracted = try await ItineraryParserService.shared.parse(emailText: email.bodyText, tripStartDate: trip.startDate, tripEndDate: trip.endDate)
+                    totalExtractedBeforeFilter += extracted.count
                     
                     for item in extracted {
                         // Check if the item's time overlaps with the trip's dates
-                        // We add a 1 day buffer to account for time zones / overnight travel
+                        // We add a 2 day buffer to account for time zones / overnight travel
                         let startOfDay = Calendar.current.startOfDay(for: trip.startDate)
                         let endOfDay = Calendar.current.startOfDay(for: trip.endDate).addingTimeInterval(86400 - 1)
-                        let paddedStart = Calendar.current.date(byAdding: .day, value: -1, to: startOfDay) ?? startOfDay
-                        let paddedEnd = Calendar.current.date(byAdding: .day, value: 1, to: endOfDay) ?? endOfDay
+                        let paddedStart = Calendar.current.date(byAdding: .day, value: -2, to: startOfDay) ?? startOfDay
+                        let paddedEnd = Calendar.current.date(byAdding: .day, value: 2, to: endOfDay) ?? endOfDay
                         
                         let itemEndTime = item.endTime ?? item.startTime
                         if item.startTime <= paddedEnd && itemEndTime >= paddedStart {
@@ -222,6 +225,7 @@ struct TripDetailView: View {
                         }
                     }
                 } catch {
+                    parseErrorCount += 1
                     print("Error parsing email \(email.subject): \(error)")
                 }
                 await MainActor.run {
@@ -238,8 +242,12 @@ struct TripDetailView: View {
                 
                 if emails.isEmpty {
                     syncError = "No travel emails found."
+                } else if parseErrorCount == emails.count {
+                    syncError = "Found \(emails.count) travel emails, but all failed to parse. Check your API key and extraction engine in Settings."
+                } else if newItems.isEmpty && totalExtractedBeforeFilter > 0 {
+                    syncError = "Extracted \(totalExtractedBeforeFilter) items from \(emails.count) emails, but none matched the dates of \(trip.name). Check your trip dates."
                 } else if newItems.isEmpty {
-                    syncError = "Found \(emails.count) travel emails, but no itinerary items within the dates of \(trip.name)."
+                    syncError = "Found \(emails.count) travel emails, but no itinerary items could be extracted. \(parseErrorCount) emails failed to parse."
                 }
             }
         }

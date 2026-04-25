@@ -23,6 +23,11 @@ struct ExtractedItineraryItem: Codable {
 class ItineraryParserService {
     static let shared = ItineraryParserService()
     
+    #if canImport(FoundationModels)
+    /// Reuse a single session across calls to preserve context efficiently
+    private var appleIntelligenceSession: AnyObject?
+    #endif
+    
     enum ParserError: Error {
         case invalidAPIKey
         case networkError(String)
@@ -133,8 +138,7 @@ class ItineraryParserService {
                 ["role": "system", "content": systemPrompt],
                 ["role": "user", "content": text]
             ],
-            "response_format": schema,
-            "temperature": 0.0
+            "response_format": schema
         ]
         
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -206,20 +210,79 @@ class ItineraryParserService {
         throw ParserError.parsingError("Could not decode content string to data")
     }
     
+    /// Strips HTML tags and collapses excessive whitespace to reduce token count
+    private func stripHTMLAndCondense(_ text: String) -> String {
+        // Remove HTML tags
+        var cleaned = text.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
+        // Remove URLs (they waste tokens)
+        cleaned = cleaned.replacingOccurrences(of: "https?://[^\\s]+", with: "", options: .regularExpression)
+        // Collapse whitespace
+        cleaned = cleaned.replacingOccurrences(of: "[\\s]+", with: " ", options: .regularExpression)
+        // Trim
+        cleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+        return cleaned
+    }
+    
+    /// A much shorter system prompt for Apple Intelligence to save context tokens
+    private var condensedSystemPrompt: String {
+        """
+        Extract travel items from email text as a JSON array. Output ONLY valid JSON, no markdown.
+        Schema: [{"title":"String","startTime":"ISO8601","endTime":"ISO8601 or null","locationName":"String","provider":"String or null","bookingReference":"String or null","travelMode":"Flight|Hotel|Bus|Train|Activity","notes":"String or null"}]
+        Rules: Use local time. Split layovers into separate legs. Hotel defaults: check-in 15:00, check-out 11:00. If no travel data found, return [].
+        """
+    }
+    
     private func parseWithAppleIntelligence(text: String, systemPrompt: String) async throws -> [ExtractedItineraryItem] {
         #if canImport(FoundationModels)
         if #available(iOS 18.0, macOS 15.0, macCatalyst 26.0, *) {
             print("[ItineraryParserService] Running Apple Intelligence on-device extraction...")
-            let session = LanguageModelSession()
-            let truncatedText = String(text.prefix(2500))
-            let prompt = "\(systemPrompt)\n\nRAW EMAIL TEXT:\n\(truncatedText)"
+            
+            // Reuse session across calls to preserve context efficiently
+            let session: LanguageModelSession
+            if let existing = appleIntelligenceSession as? LanguageModelSession {
+                session = existing
+            } else {
+                session = LanguageModelSession()
+                appleIntelligenceSession = session
+            }
+            
+            // Aggressively strip HTML/URLs and condense whitespace to save tokens
+            let cleanedText = stripHTMLAndCondense(text)
+            
+            // Use the condensed prompt + only the trip date context (skip verbose system prompt)
+            let dateFormatter = ISO8601DateFormatter()
+            dateFormatter.formatOptions = [.withYear, .withMonth, .withDay, .withDashSeparatorInDate]
+            
+            // Extract just the CONTEXT INFO portion from the full systemPrompt
+            var contextLine = ""
+            if let range = systemPrompt.range(of: "CONTEXT INFO:") {
+                let contextSection = systemPrompt[range.lowerBound...]
+                if let endRange = contextSection.range(of: "\n\n") {
+                    contextLine = String(contextSection[..<endRange.lowerBound])
+                } else {
+                    contextLine = String(contextSection)
+                }
+            }
+            
+            // Hard cap at 1500 chars to stay well within 4096 token limit
+            // (condensed prompt ~200 tokens, context ~50 tokens, leaves ~3800 for email + response)
+            let maxEmailChars = 1500
+            let truncatedText = String(cleanedText.prefix(maxEmailChars))
+            
+            let prompt = "\(condensedSystemPrompt)\n\(contextLine)\n\nEMAIL:\n\(truncatedText)"
+            
+            print("[AppleIntelligence] Prompt length: \(prompt.count) chars")
             
             do {
                 let response = try await session.respond(to: prompt)
                 let contentString = response.content
                 
-                guard let start = contentString.firstIndex(of: "["), let end = contentString.lastIndex(of: "]") else {
-                    throw ParserError.parsingError("No JSON array found in Apple Intelligence response.")
+                // Look for JSON array or object
+                guard let start = contentString.firstIndex(of: "[") ?? contentString.firstIndex(of: "{"),
+                      let end = contentString.lastIndex(of: "]") ?? contentString.lastIndex(of: "}") else {
+                    // No travel data found — return empty rather than error
+                    print("[AppleIntelligence] No JSON found in response, returning empty.")
+                    return []
                 }
                 
                 let jsonString = String(contentString[start...end])
@@ -247,20 +310,29 @@ class ItineraryParserService {
                     throw DecodingError.dataCorruptedError(in: container, debugDescription: "Invalid date: \(dateString)")
                 }
                 
-                // Attempt to decode
+                // Attempt to decode as array
                 if let array = try? decoder.decode([ExtractedItineraryItem].self, from: contentData) {
                     return array
                 }
                 
-                // Fallback for object with items
+                // Fallback for object with items key
                 struct ObjectResult: Codable { let items: [ExtractedItineraryItem] }
                 if let obj = try? decoder.decode(ObjectResult.self, from: contentData) {
                     return obj.items
                 }
                 
                 throw ParserError.parsingError("Failed to parse Apple Intelligence JSON structure.")
+            } catch let error as ParserError {
+                throw error
             } catch {
-                throw ParserError.parsingError("Apple Intelligence Error: \(error.localizedDescription)")
+                // If context window exceeded, reset session and return empty
+                let errorDesc = error.localizedDescription
+                if errorDesc.contains("context") || errorDesc.contains("token") || errorDesc.contains("exceeded") {
+                    print("[AppleIntelligence] Context window exceeded, resetting session.")
+                    appleIntelligenceSession = nil
+                    return []
+                }
+                throw ParserError.parsingError("Apple Intelligence Error: \(errorDesc)")
             }
         } else {
             throw ParserError.missingEngine
