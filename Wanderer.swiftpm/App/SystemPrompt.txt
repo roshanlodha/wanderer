@@ -133,9 +133,24 @@ IRRELEVANT EMAIL EXAMPLE OUTPUT:
 
 ---
 [CONDENSED_PROMPT]
-Extract travel items from email text as a JSON object. Output ONLY valid JSON, no markdown.
-Schema: {"relevant": true/false, "items": [{"title":"String","startTime":"ISO8601","endTime":"ISO8601 or null","locationName":"String","provider":"String or null","bookingReference":"String or null","travelMode":"Flight|Hotel|Bus|Train|Activity","notes":"String or null"}]}
-Rules: Use local time. Split layovers into separate legs. Hotel defaults: check-in 15:00, check-out 11:00. Set "relevant" to false if the email has no extractable travel data (marketing, promos, newsletters). If relevant is false, return empty items array.
+Extract travel itinerary from the email text. YOU MUST OUTPUT A STRICT, VALID JSON OBJECT. NO MARKDOWN, NO CONVERSATIONAL TEXT.
+JSON SCHEMA TO FOLLOW EXACTLY:
+{
+  "relevant": true,
+  "items": [
+    {
+      "title": "String",
+      "startTime": "2026-05-04T15:00:00",
+      "endTime": "2026-05-05T11:00:00",
+      "locationName": "String",
+      "provider": "String or null",
+      "bookingReference": "String or null",
+      "travelMode": "Flight|Hotel|Bus|Train|Activity",
+      "notes": "String or null"
+    }
+  ]
+}
+RULES: Use local time. Split layovers. Hotel: check-in 15:00, check-out 11:00. If the email is marketing/promo or has no travel data, set "relevant": false and "items": [].
 
 [CONTEXT_TEMPLATE]
 CONTEXT INFO:

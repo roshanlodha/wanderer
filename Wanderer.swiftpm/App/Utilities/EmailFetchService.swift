@@ -8,6 +8,15 @@ struct FetchedEmail: Identifiable {
     let sender: String
     let date: Date
     let bodyText: String
+    
+    /// Status of extraction for this email
+    enum ExtractionStatus: Equatable {
+        case pending       // Not yet extracted
+        case extracting    // Currently being processed
+        case extracted(Int) // Successfully extracted N items
+        case irrelevant    // LLM determined not travel-related
+        case failed(String) // Extraction failed with error
+    }
 }
 
 // MARK: - Email Fetch Service
@@ -15,13 +24,35 @@ struct FetchedEmail: Identifiable {
 class EmailFetchService {
     static let shared = EmailFetchService()
     
-    let travelKeywords = ["confirmation", "itinerary", "ticket", "reservation", "booking", "flight", "hotel", "check-in"]
+    /// More targeted travel-specific search queries.
+    /// Uses phrase matching and category-specific terms to reduce false positives.
+    /// Words like "confirmation" and "ticket" alone are far too broad.
+    private let gmailSearchQuery = """
+    (subject:(flight OR itinerary OR "boarding pass" OR "e-ticket" OR "travel confirmation" OR "booking confirmation" OR "reservation confirmation" OR "hotel reservation" OR "car rental" OR "trip" OR airbnb OR "check-in" OR "check in") \
+    OR from:(booking.com OR airbnb.com OR hotels.com OR expedia.com OR kayak.com OR tripadvisor.com OR united.com OR delta.com OR aa.com OR southwest.com OR jetblue.com OR amtrak.com OR vrbo.com OR marriott.com OR hilton.com OR hyatt.com OR ihg.com OR hertz.com OR avis.com OR enterprise.com OR capitalone.com OR opentable.com OR resy.com OR virginatlantic.com OR ryanair.com OR easyjet.com OR flixbus.com OR trainline.com OR scotrail.co.uk))
+    """
+    
+    private let microsoftSearchTerms = [
+        "flight confirmation", "booking confirmation", "reservation confirmation",
+        "hotel reservation", "itinerary", "boarding pass", "e-ticket",
+        "travel confirmation", "airbnb", "check-in"
+    ]
+    
+    /// Known non-travel sender patterns to filter out at the fetch level
+    private let spamSenderPatterns = [
+        "noreply@github.com", "notifications@github.com",
+        "no-reply@accounts.google.com", "noreply@medium.com",
+        "newsletter", "marketing", "promo", "digest",
+        "noreply@slack.com", "notification@facebookmail.com",
+        "info@twitter.com", "noreply@linkedin.com"
+    ]
     
     private let keychain = KeychainManager.shared
     
-    // MARK: - Public API (Trip-Scoped)
+    // MARK: - Public API
     
     /// Fetch travel emails from all connected providers.
+    /// This ONLY fetches — no extraction happens here.
     func fetchTravelEmails() async -> [FetchedEmail] {
         var allEmails: [FetchedEmail] = []
         
@@ -53,20 +84,37 @@ class EmailFetchService {
             print("[EmailFetchService] No connected accounts or no emails found.")
         }
         
-        return allEmails
+        // Filter out known spam/non-travel senders
+        let filtered = allEmails.filter { email in
+            let senderLower = email.sender.lowercased()
+            let subjectLower = email.subject.lowercased()
+            
+            // Exclude forwarded emails
+            if subjectLower.hasPrefix("fwd:") || subjectLower.hasPrefix("fw:") {
+                return false
+            }
+            
+            // Exclude known non-travel senders
+            for pattern in spamSenderPatterns {
+                if senderLower.contains(pattern) {
+                    return false
+                }
+            }
+            
+            return true
+        }
+        
+        print("[EmailFetchService] After filtering: \(filtered.count) emails (removed \(allEmails.count - filtered.count) non-travel)")
+        return filtered
     }
     
     // MARK: - Gmail REST API
     
     private func fetchGmailTravelEmails(accessToken: String) async throws -> [FetchedEmail] {
-        // Gmail query: travel keywords
-        let keywordQuery = travelKeywords.joined(separator: " OR ")
-        let query = "(\(keywordQuery))"
-        
         var searchComponents = URLComponents(string: "https://gmail.googleapis.com/gmail/v1/users/me/messages")!
         searchComponents.queryItems = [
-            URLQueryItem(name: "q", value: query),
-            URLQueryItem(name: "maxResults", value: "50")
+            URLQueryItem(name: "q", value: gmailSearchQuery),
+            URLQueryItem(name: "maxResults", value: "30")
         ]
         
         let searchRequest = makeAuthorizedRequest(url: searchComponents.url!, token: accessToken)
@@ -81,16 +129,21 @@ class EmailFetchService {
         
         // Fetch full message for each result
         var emails: [FetchedEmail] = []
-        for ref in messageRefs.prefix(50) {
-            let messageURL = URL(string: "https://gmail.googleapis.com/gmail/v1/users/me/messages/\(ref.id)?format=full")!
-            let msgRequest = makeAuthorizedRequest(url: messageURL, token: accessToken)
-            let (msgData, msgResponse) = try await URLSession.shared.data(for: msgRequest)
-            
-            try validateHTTPResponse(msgResponse, data: msgData, context: "Gmail message \(ref.id)")
-            
-            let message = try JSONDecoder().decode(GmailMessage.self, from: msgData)
-            if let email = parsedGmailMessage(message) {
-                emails.append(email)
+        for ref in messageRefs.prefix(30) {
+            do {
+                let messageURL = URL(string: "https://gmail.googleapis.com/gmail/v1/users/me/messages/\(ref.id)?format=full")!
+                let msgRequest = makeAuthorizedRequest(url: messageURL, token: accessToken)
+                let (msgData, msgResponse) = try await URLSession.shared.data(for: msgRequest)
+                
+                try validateHTTPResponse(msgResponse, data: msgData, context: "Gmail message \(ref.id)")
+                
+                let message = try JSONDecoder().decode(GmailMessage.self, from: msgData)
+                if let email = parsedGmailMessage(message) {
+                    emails.append(email)
+                }
+            } catch {
+                print("[EmailFetchService] Failed to fetch message \(ref.id): \(error.localizedDescription)")
+                // Continue fetching other messages
             }
         }
         
@@ -100,12 +153,12 @@ class EmailFetchService {
     // MARK: - Microsoft Graph REST API
     
     private func fetchMicrosoftTravelEmails(accessToken: String) async throws -> [FetchedEmail] {
-        let keywordQuery = travelKeywords.joined(separator: " OR ")
+        let keywordQuery = microsoftSearchTerms.map { "\"\($0)\"" }.joined(separator: " OR ")
         
         var searchComponents = URLComponents(string: "https://graph.microsoft.com/v1.0/me/messages")!
         searchComponents.queryItems = [
             URLQueryItem(name: "$search", value: "\"\(keywordQuery)\""),
-            URLQueryItem(name: "$top", value: "50"),
+            URLQueryItem(name: "$top", value: "30"),
             URLQueryItem(name: "$select", value: "id,subject,from,receivedDateTime,body")
         ]
         
@@ -139,6 +192,7 @@ class EmailFetchService {
     private func makeAuthorizedRequest(url: URL, token: String) -> URLRequest {
         var request = URLRequest(url: url)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 30
         return request
     }
     

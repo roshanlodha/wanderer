@@ -6,8 +6,12 @@ struct TripDetailView: View {
     
     @Environment(\.modelContext) private var modelContext
     
-    @State private var isSyncing = false
+    // Sync state
+    @State private var isFetchingEmails = false
+    @State private var isExtracting = false
     @State private var fetchedEmails: [FetchedEmail] = []
+    @State private var emailStatuses: [String: FetchedEmail.ExtractionStatus] = [:]
+    @State private var expandedEmailIds: Set<String> = []
     @State private var syncError: String?
     @State private var syncProgress: Double = 0
     @State private var syncTotal: Double = 0
@@ -35,47 +39,25 @@ struct TripDetailView: View {
         OAuthService().isConnected(provider: .google) || OAuthService().isConnected(provider: .microsoft)
     }
     
+    var isBusy: Bool {
+        isFetchingEmails || isExtracting
+    }
+    
     var body: some View {
         ScrollView {
             VStack(spacing: 0) {
-                if isSyncing {
+                // Progress indicator
+                if isBusy {
                     syncProgressView
                 }
                 
-                if !isSyncing && trip.items.isEmpty && fetchedEmails.isEmpty {
+                // Empty state
+                if !isBusy && trip.items.isEmpty && fetchedEmails.isEmpty {
                     emptyStateView
                 } else {
                     // Itinerary items
-                    ForEach(groupedItems, id: \.0) { date, items in
-                        VStack(alignment: .leading, spacing: 16) {
-                            Text(date, format: .dateTime.weekday(.wide).month().day())
-                                .font(.headline)
-                                .foregroundColor(.secondary)
-                                .padding(.top, 8)
-                            
-                            ForEach(items, id: \.id) { item in
-                                HStack(alignment: .top) {
-                                    TimelineItemView(item: item)
-                                    
-                                    Button {
-                                        deleteItem(item)
-                                    } label: {
-                                        Image(systemName: "trash.circle.fill")
-                                            .font(.title3)
-                                            .foregroundColor(.red.opacity(0.6))
-                                    }
-                                    .buttonStyle(.plain)
-                                    .padding(.top, 8)
-                                }
-                                .contextMenu {
-                                    Button(role: .destructive) {
-                                        deleteItem(item)
-                                    } label: {
-                                        Label("Delete", systemImage: "trash")
-                                    }
-                                }
-                            }
-                        }
+                    if !groupedItems.isEmpty {
+                        itinerarySection
                     }
                     
                     // Fetched email previews
@@ -90,6 +72,7 @@ struct TripDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
+                // Green plus — manual add
                 Button {
                     showAddItemSheet = true
                 } label: {
@@ -98,22 +81,23 @@ struct TripDetailView: View {
                         .font(.title3)
                 }
                 
+                // Email sync button
                 if hasConnectedEmail {
                     Button {
-                        syncEmailsForTrip()
+                        fetchEmails()
                     } label: {
-                        if isSyncing {
+                        if isFetchingEmails {
                             ProgressView()
                                 .controlSize(.small)
                         } else {
                             Label("Sync Emails", systemImage: "envelope.arrow.triangle.branch")
                         }
                     }
-                    .disabled(isSyncing)
+                    .disabled(isBusy)
                 }
             }
         }
-        .alert("Sync Error", isPresented: .constant(syncError != nil)) {
+        .alert("Sync Info", isPresented: .constant(syncError != nil)) {
             Button("OK") { syncError = nil }
         } message: {
             Text(syncError ?? "")
@@ -123,22 +107,64 @@ struct TripDetailView: View {
         }
     }
     
+    // MARK: - Itinerary Section
+    
+    private var itinerarySection: some View {
+        ForEach(groupedItems, id: \.0) { date, items in
+            VStack(alignment: .leading, spacing: 16) {
+                Text(date, format: .dateTime.weekday(.wide).month().day())
+                    .font(.headline)
+                    .foregroundColor(.secondary)
+                    .padding(.top, 8)
+                
+                ForEach(items, id: \.id) { item in
+                    HStack(alignment: .top) {
+                        TimelineItemView(item: item)
+                        
+                        Button {
+                            deleteItem(item)
+                        } label: {
+                            Image(systemName: "trash.circle.fill")
+                                .font(.title3)
+                                .foregroundColor(.red.opacity(0.6))
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.top, 8)
+                    }
+                    .contextMenu {
+                        Button(role: .destructive) {
+                            deleteItem(item)
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
     // MARK: - Sync Progress View
     
     private var syncProgressView: some View {
         VStack(spacing: 12) {
             HStack {
-                Text("Syncing Emails...")
+                Text(isFetchingEmails ? "Fetching Emails..." : "Extracting Itinerary...")
                     .font(.subheadline)
                     .fontWeight(.semibold)
                 Spacer()
-                Text("\(Int(syncProgress)) / \(Int(syncTotal))")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                if syncTotal > 0 {
+                    Text("\(Int(syncProgress)) / \(Int(syncTotal))")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
             }
             
-            ProgressView(value: syncProgress, total: max(1, syncTotal))
-                .tint(.blue)
+            if syncTotal > 0 {
+                ProgressView(value: syncProgress, total: max(1, syncTotal))
+                    .tint(isExtracting ? .green : .blue)
+            } else {
+                ProgressView()
+            }
             
             Text(syncStatus)
                 .font(.caption2)
@@ -150,7 +176,7 @@ struct TripDetailView: View {
         .cornerRadius(12)
         .shadow(color: .black.opacity(0.05), radius: 5, x: 0, y: 2)
         .padding(.horizontal)
-        .padding(.vertical, 32)
+        .padding(.vertical, 16)
     }
     
     // MARK: - Empty State
@@ -163,7 +189,7 @@ struct TripDetailView: View {
         } actions: {
             HStack(spacing: 16) {
                 if hasConnectedEmail {
-                    Button(action: { syncEmailsForTrip() }) {
+                    Button(action: { fetchEmails() }) {
                         Label("Sync Email", systemImage: "arrow.triangle.2.circlepath")
                     }
                     .buttonStyle(.borderedProminent)
@@ -185,9 +211,10 @@ struct TripDetailView: View {
                 .padding(.vertical, 12)
             
             HStack {
-                Text("Emails Found")
+                Text("Detected Emails")
                     .font(.headline)
                 Spacer()
+                
                 Text("\(fetchedEmails.count)")
                     .font(.caption)
                     .fontWeight(.semibold)
@@ -196,6 +223,19 @@ struct TripDetailView: View {
                     .padding(.vertical, 2)
                     .background(Color.blue)
                     .clipShape(Capsule())
+                
+                // Extract All button
+                Button {
+                    extractAllEmails()
+                } label: {
+                    Label("Extract All", systemImage: "sparkles")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.green)
+                .controlSize(.small)
+                .disabled(isExtracting || fetchedEmails.isEmpty)
             }
             .padding(.horizontal)
             
@@ -209,41 +249,63 @@ struct TripDetailView: View {
     
     @ViewBuilder
     private func emailRow(_ email: FetchedEmail) -> some View {
+        let status = emailStatuses[email.id] ?? .pending
+        let isExpanded = expandedEmailIds.contains(email.id)
+        
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(email.subject)
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                        .lineLimit(2)
-                    
-                    HStack {
-                        Text(email.sender)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .lineLimit(1)
-                        Spacer()
-                        Text(email.date, format: .dateTime.month(.abbreviated).day())
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        if isExpanded {
+                            expandedEmailIds.remove(email.id)
+                        } else {
+                            expandedEmailIds.insert(email.id)
+                        }
                     }
-                    
-                    Text(email.bodyText.prefix(120) + "…")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .lineLimit(2)
+                } label: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 6) {
+                            statusIcon(for: status)
+                            
+                            Text(email.subject)
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                                .lineLimit(isExpanded ? nil : 2)
+                                .multilineTextAlignment(.leading)
+                            
+                            Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        HStack {
+                            Text(email.sender)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
+                            Spacer()
+                            Text(email.date, format: .dateTime.month(.abbreviated).day())
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        // Status text
+                        statusText(for: status)
+                    }
                 }
+                .buttonStyle(.plain)
                 
                 VStack(spacing: 8) {
-                    // Reparse button
+                    // Extract / Reparse button
                     Button {
-                        reparseEmail(email)
+                        extractSingleEmail(email)
                     } label: {
-                        Image(systemName: "arrow.clockwise.circle.fill")
+                        Image(systemName: status == .pending ? "sparkles" : "arrow.clockwise.circle.fill")
                             .font(.title3)
                             .foregroundColor(.blue)
                     }
                     .buttonStyle(.plain)
+                    .disabled(status == .extracting)
                     
                     // Remove email button
                     Button {
@@ -257,11 +319,81 @@ struct TripDetailView: View {
                 }
                 .padding(.leading, 4)
             }
+            
+            if isExpanded {
+                Divider()
+                    .padding(.vertical, 4)
+                
+                Text(email.bodyText)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.bottom, 4)
+            }
         }
         .padding(12)
-        .background(Color(.secondarySystemGroupedBackground))
+        .background(backgroundForStatus(status))
         .cornerRadius(10)
         .padding(.horizontal)
+    }
+    
+    @ViewBuilder
+    private func statusIcon(for status: FetchedEmail.ExtractionStatus) -> some View {
+        switch status {
+        case .pending:
+            Image(systemName: "circle")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        case .extracting:
+            ProgressView()
+                .controlSize(.mini)
+        case .extracted:
+            Image(systemName: "checkmark.circle.fill")
+                .font(.caption)
+                .foregroundColor(.green)
+        case .irrelevant:
+            Image(systemName: "minus.circle.fill")
+                .font(.caption)
+                .foregroundColor(.orange)
+        case .failed:
+            Image(systemName: "exclamationmark.circle.fill")
+                .font(.caption)
+                .foregroundColor(.red)
+        }
+    }
+    
+    @ViewBuilder
+    private func statusText(for status: FetchedEmail.ExtractionStatus) -> some View {
+        switch status {
+        case .pending:
+            EmptyView()
+        case .extracting:
+            Text("Extracting...")
+                .font(.caption2)
+                .foregroundColor(.blue)
+        case .extracted(let count):
+            Text("\(count) item\(count == 1 ? "" : "s") extracted")
+                .font(.caption2)
+                .foregroundColor(.green)
+        case .irrelevant:
+            Text("Not travel-related")
+                .font(.caption2)
+                .foregroundColor(.orange)
+        case .failed(let msg):
+            Text("Failed: \(msg)")
+                .font(.caption2)
+                .foregroundColor(.red)
+                .lineLimit(1)
+        }
+    }
+    
+    private func backgroundForStatus(_ status: FetchedEmail.ExtractionStatus) -> Color {
+        switch status {
+        case .irrelevant: return Color.orange.opacity(0.05)
+        case .failed: return Color.red.opacity(0.05)
+        case .extracted: return Color.green.opacity(0.05)
+        default: return Color(.secondarySystemGroupedBackground)
+        }
     }
     
     // MARK: - Add Item Sheet
@@ -332,46 +464,7 @@ struct TripDetailView: View {
     private func removeEmail(_ email: FetchedEmail) {
         withAnimation {
             fetchedEmails.removeAll { $0.id == email.id }
-        }
-    }
-    
-    private func reparseEmail(_ email: FetchedEmail) {
-        Task {
-            await MainActor.run {
-                syncStatus = "Re-parsing: \(email.subject.prefix(40))..."
-                isSyncing = true
-                syncTotal = 1
-                syncProgress = 0
-            }
-            
-            do {
-                let result = try await ItineraryParserService.shared.parse(
-                    emailText: email.bodyText,
-                    tripStartDate: trip.startDate,
-                    tripEndDate: trip.endDate
-                )
-                
-                await MainActor.run {
-                    if result.relevant {
-                        let filtered = filterItemsForTrip(result.items)
-                        for item in filtered {
-                            trip.items.append(item)
-                        }
-                        if filtered.isEmpty {
-                            syncError = "Re-parsed email, but no items matched the trip dates."
-                        }
-                    } else {
-                        syncError = "LLM determined this email has no actionable travel data."
-                    }
-                    syncProgress = 1
-                    isSyncing = false
-                }
-            } catch {
-                await MainActor.run {
-                    syncError = "Re-parse failed: \(error.localizedDescription)"
-                    isSyncing = false
-                }
-            }
+            emailStatuses.removeValue(forKey: email.id)
         }
     }
     
@@ -418,43 +511,83 @@ struct TripDetailView: View {
         }
     }
     
-    // MARK: - Sync
+    // MARK: - Phase 1: Fetch Emails (no extraction)
     
-    private func syncEmailsForTrip() {
-        isSyncing = true
+    private func fetchEmails() {
+        isFetchingEmails = true
         syncError = nil
         
         Task {
             await MainActor.run {
-                syncStatus = "Fetching travel emails..."
-                syncTotal = 1
+                syncStatus = "Searching for travel emails..."
+                syncTotal = 0
                 syncProgress = 0
             }
             
-            let allEmails = await EmailFetchService.shared.fetchTravelEmails()
-            // Filter out forwarded emails as requested by user
-            let emails = allEmails.filter { 
-                let lowerSubject = $0.subject.lowercased()
-                return !lowerSubject.hasPrefix("fwd:") && !lowerSubject.hasPrefix("fw:")
-            }
+            let emails = await EmailFetchService.shared.fetchTravelEmails()
             
             await MainActor.run {
                 fetchedEmails = emails
-                syncStatus = "Identifying emails..."
-                syncTotal = Double(max(1, emails.count))
+                // Initialize all statuses to pending
+                emailStatuses = [:]
+                for email in emails {
+                    emailStatuses[email.id] = .pending
+                }
+                isFetchingEmails = false
+                
+                if emails.isEmpty {
+                    syncError = "No travel-related emails found. Try connecting an email account in Settings or check that you have travel confirmation emails."
+                } else {
+                    syncStatus = "Found \(emails.count) potential travel emails. Review them below and tap 'Extract All' or extract individually."
+                }
+            }
+        }
+    }
+    
+    // MARK: - Phase 2: Extract Itinerary from All Emails
+    
+    private func extractAllEmails() {
+        let pendingEmails = fetchedEmails.filter { email in
+            let status = emailStatuses[email.id] ?? .pending
+            switch status {
+            case .pending, .failed:
+                return true
+            default:
+                return false
+            }
+        }
+        
+        guard !pendingEmails.isEmpty else {
+            // Re-extract all if everything is already processed
+            extractEmails(fetchedEmails)
+            return
+        }
+        
+        extractEmails(pendingEmails)
+    }
+    
+    private func extractEmails(_ emails: [FetchedEmail]) {
+        isExtracting = true
+        syncError = nil
+        
+        Task {
+            await MainActor.run {
+                syncStatus = "Extracting itinerary from \(emails.count) emails..."
+                syncTotal = Double(emails.count)
                 syncProgress = 0
             }
             
-            // Parse each email and add items IMMEDIATELY as they're extracted
-            var parseErrorCount = 0
-            var totalExtractedBeforeFilter = 0
-            var totalAddedItems = 0
-            var rejectedByLLM = 0
+            var totalAdded = 0
+            var totalRejected = 0
+            var totalFailed = 0
+            var totalDuplicates = 0
             
             for (index, email) in emails.enumerated() {
                 await MainActor.run {
-                    syncStatus = "Parsing email \(index + 1) of \(emails.count)..."
+                    syncStatus = "Extracting \(index + 1) of \(emails.count): \(email.subject.prefix(30))..."
+                    emailStatuses[email.id] = .extracting
                 }
+                
                 do {
                     let result = try await ItineraryParserService.shared.parse(
                         emailText: email.bodyText,
@@ -462,52 +595,117 @@ struct TripDetailView: View {
                         tripEndDate: trip.endDate
                     )
                     
-                    if !result.relevant {
-                        rejectedByLLM += 1
-                        await MainActor.run {
-                            syncProgress += 1
-                        }
-                        continue
-                    }
-                    
-                    totalExtractedBeforeFilter += result.items.count
-                    let filtered = filterItemsForTrip(result.items)
-                    
-                    // Add items to the trip IMMEDIATELY after each email is parsed
                     await MainActor.run {
-                        for item in filtered {
-                            trip.items.append(item)
+                        if !result.relevant {
+                            emailStatuses[email.id] = .irrelevant
+                            totalRejected += 1
+                        } else {
+                            let filtered = filterItemsForTrip(result.items)
+                            var addedForEmail = 0
+                            
+                            for item in filtered {
+                                // Duplicate detection
+                                if ItineraryParserService.shared.isDuplicate(item, existingItems: trip.items) {
+                                    totalDuplicates += 1
+                                    print("[Extraction] Skipped duplicate: \(item.title)")
+                                } else {
+                                    trip.items.append(item)
+                                    addedForEmail += 1
+                                    totalAdded += 1
+                                }
+                            }
+                            
+                            emailStatuses[email.id] = .extracted(addedForEmail)
                         }
-                        totalAddedItems += filtered.count
                         syncProgress += 1
                     }
                 } catch {
-                    parseErrorCount += 1
-                    print("Error parsing email \(email.subject): \(error)")
+                    totalFailed += 1
+                    print("[Extraction] Error parsing email '\(email.subject)': \(error)")
                     await MainActor.run {
+                        emailStatuses[email.id] = .failed(error.localizedDescription)
                         syncProgress += 1
                     }
                 }
+                
+                // Small delay between API calls to avoid rate limiting
+                if index < emails.count - 1 {
+                    try? await Task.sleep(nanoseconds: 300_000_000) // 300ms
+                }
             }
             
+            // Auto-remove irrelevant emails from the list
             await MainActor.run {
-                isSyncing = false
+                let irrelevantIds = emailStatuses.filter { $0.value == .irrelevant }.map { $0.key }
+                fetchedEmails.removeAll { irrelevantIds.contains($0.id) }
+                for id in irrelevantIds {
+                    emailStatuses.removeValue(forKey: id)
+                }
                 
-                if emails.isEmpty {
-                    syncError = "No travel emails found."
-                } else if parseErrorCount == emails.count {
-                    syncError = "Found \(emails.count) travel emails, but all failed to parse. Check your API key and extraction engine in Settings."
-                } else if totalAddedItems == 0 && totalExtractedBeforeFilter > 0 {
-                    syncError = "Extracted \(totalExtractedBeforeFilter) items from \(emails.count) emails, but none matched the dates of \(trip.name). Check your trip dates."
-                } else if totalAddedItems == 0 {
-                    var msg = "Found \(emails.count) travel emails, but no itinerary items could be extracted."
-                    if rejectedByLLM > 0 {
-                        msg += " \(rejectedByLLM) emails were determined to be non-travel content."
+                isExtracting = false
+                
+                // Build summary
+                var parts: [String] = []
+                if totalAdded > 0 { parts.append("✅ \(totalAdded) items added") }
+                if totalDuplicates > 0 { parts.append("⏭ \(totalDuplicates) duplicates skipped") }
+                if totalRejected > 0 { parts.append("🚫 \(totalRejected) non-travel emails removed") }
+                if totalFailed > 0 { parts.append("❌ \(totalFailed) emails failed to parse") }
+                
+                if totalAdded == 0 && totalFailed > 0 {
+                    syncError = parts.joined(separator: "\n") + "\n\nCheck your API key and extraction engine in Settings."
+                } else if !parts.isEmpty {
+                    syncStatus = parts.joined(separator: " · ")
+                }
+            }
+        }
+    }
+    
+    // MARK: - Extract Single Email
+    
+    private func extractSingleEmail(_ email: FetchedEmail) {
+        Task {
+            await MainActor.run {
+                emailStatuses[email.id] = .extracting
+            }
+            
+            do {
+                let result = try await ItineraryParserService.shared.parse(
+                    emailText: email.bodyText,
+                    tripStartDate: trip.startDate,
+                    tripEndDate: trip.endDate
+                )
+                
+                await MainActor.run {
+                    if result.relevant {
+                        let filtered = filterItemsForTrip(result.items)
+                        var addedCount = 0
+                        
+                        for item in filtered {
+                            if !ItineraryParserService.shared.isDuplicate(item, existingItems: trip.items) {
+                                trip.items.append(item)
+                                addedCount += 1
+                            }
+                        }
+                        
+                        emailStatuses[email.id] = .extracted(addedCount)
+                        
+                        if addedCount == 0 && !filtered.isEmpty {
+                            syncError = "Items were already in your itinerary (duplicates skipped)."
+                        } else if filtered.isEmpty && !result.items.isEmpty {
+                            syncError = "Extracted \(result.items.count) items, but none matched the trip dates."
+                        }
+                    } else {
+                        emailStatuses[email.id] = .irrelevant
+                        // Auto-remove irrelevant email
+                        withAnimation {
+                            fetchedEmails.removeAll { $0.id == email.id }
+                            emailStatuses.removeValue(forKey: email.id)
+                        }
                     }
-                    if parseErrorCount > 0 {
-                        msg += " \(parseErrorCount) emails failed to parse."
-                    }
-                    syncError = msg
+                }
+            } catch {
+                await MainActor.run {
+                    emailStatuses[email.id] = .failed(error.localizedDescription)
                 }
             }
         }

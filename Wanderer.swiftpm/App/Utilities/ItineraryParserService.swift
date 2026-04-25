@@ -34,11 +34,20 @@ class ItineraryParserService {
     private var appleIntelligenceSession: AnyObject?
     #endif
     
-    enum ParserError: Error {
+    enum ParserError: Error, LocalizedError {
         case invalidAPIKey
         case networkError(String)
         case parsingError(String)
         case missingEngine
+        
+        var errorDescription: String? {
+            switch self {
+            case .invalidAPIKey: return "Invalid or missing API key"
+            case .networkError(let msg): return "Network error: \(msg)"
+            case .parsingError(let msg): return "Parsing error: \(msg)"
+            case .missingEngine: return "Extraction engine not available"
+            }
+        }
     }
     
     // MARK: - Prompt Loading from SystemPrompt.txt
@@ -106,6 +115,111 @@ class ItineraryParserService {
         return context
     }
     
+    // MARK: - Text Preprocessing
+    
+    /// Strips HTML tags, URLs, and collapses excessive whitespace to reduce token count.
+    /// Used by ALL engines to normalize the email text before sending to the LLM.
+    private func preprocessEmailText(_ text: String, maxChars: Int = 6000) -> String {
+        // Remove HTML tags
+        var cleaned = text.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
+        // Remove URLs (they waste tokens and confuse extraction)
+        cleaned = cleaned.replacingOccurrences(of: "https?://[^\\s]+", with: "", options: .regularExpression)
+        // Remove email signatures / legal boilerplate markers
+        cleaned = cleaned.replacingOccurrences(of: "(?i)(unsubscribe|privacy policy|terms of service|view in browser|click here|manage preferences|email preferences).*", with: "", options: .regularExpression)
+        // Collapse whitespace
+        cleaned = cleaned.replacingOccurrences(of: "[\\s]+", with: " ", options: .regularExpression)
+        // Trim
+        cleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Hard cap to stay within token limits
+        if cleaned.count > maxChars {
+            cleaned = String(cleaned.prefix(maxChars))
+        }
+        return cleaned
+    }
+    
+    // MARK: - Custom Date Decoder
+    
+    /// Shared date decoding strategy used across all engines
+    private var customDateDecoder: JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            let dateString = try container.decode(String.self)
+            
+            let formatter = ISO8601DateFormatter()
+            // Standard ISO8601 with timezone
+            if let date = formatter.date(from: dateString) {
+                return date
+            }
+            // With fractional seconds
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            if let date = formatter.date(from: dateString) {
+                return date
+            }
+            // Without timezone (local time)
+            formatter.formatOptions = [.withYear, .withMonth, .withDay, .withTime, .withDashSeparatorInDate, .withColonSeparatorInTime]
+            if let date = formatter.date(from: dateString) {
+                return date
+            }
+            // DateFormatter fallback
+            let fallback = DateFormatter()
+            fallback.locale = Locale(identifier: "en_US_POSIX")
+            fallback.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
+            if let date = fallback.date(from: dateString) {
+                return date
+            }
+            // Date-only fallback (some items may only have a date)
+            fallback.dateFormat = "yyyy-MM-dd"
+            if let date = fallback.date(from: dateString) {
+                return date
+            }
+            
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Cannot decode date string: \(dateString)")
+        }
+        return decoder
+    }
+    
+    // MARK: - Duplicate Detection
+    
+    /// Checks if a new item is a duplicate of any existing items in the trip.
+    /// Two items are considered duplicates if they share the same travel mode and
+    /// have overlapping start times within a 30-minute window, and similar titles.
+    func isDuplicate(_ newItem: ItineraryItem, existingItems: [ItineraryItem]) -> Bool {
+        for existing in existingItems {
+            // Same travel mode
+            guard newItem.travelMode == existing.travelMode else { continue }
+            
+            // Start times within 30 minutes of each other
+            let timeDiff = abs(newItem.startTime.timeIntervalSince(existing.startTime))
+            guard timeDiff < 1800 else { continue } // 30 minutes
+            
+            // Similar titles (case-insensitive, check if either contains the other or high overlap)
+            let newTitle = newItem.title.lowercased()
+            let existingTitle = existing.title.lowercased()
+            
+            if newTitle == existingTitle
+                || newTitle.contains(existingTitle)
+                || existingTitle.contains(newTitle) {
+                return true
+            }
+            
+            // Same booking reference
+            if let newRef = newItem.bookingReference, !newRef.isEmpty,
+               let existingRef = existing.bookingReference, !existingRef.isEmpty,
+               newRef.lowercased() == existingRef.lowercased() {
+                return true
+            }
+            
+            // Same location + same time window = likely duplicate
+            let newLoc = newItem.locationName.lowercased()
+            let existingLoc = existing.locationName.lowercased()
+            if timeDiff < 300 && (newLoc == existingLoc || newLoc.contains(existingLoc) || existingLoc.contains(newLoc)) {
+                return true
+            }
+        }
+        return false
+    }
+    
     // MARK: - Public API
     
     /// Parse a single email. Returns (isRelevant, items).
@@ -116,15 +230,20 @@ class ItineraryParserService {
         let contextText = buildContext(tripStartDate: tripStartDate, tripEndDate: tripEndDate)
         let dynamicPrompt = "\(baseSystemPrompt)\n\n\(contextText)"
         
+        // Preprocess the email text for ALL engines
+        let cleanedText = preprocessEmailText(emailText)
+        
+        print("[ItineraryParserService] Cleaned email text: \(cleanedText.count) chars (from \(emailText.count))")
+        
         var result: ExtractionResult
         
         if engine == "Cloud (OpenAI)" {
-            result = try await parseWithOpenAI(text: emailText, systemPrompt: dynamicPrompt)
+            result = try await parseWithOpenAI(text: cleanedText, systemPrompt: dynamicPrompt)
         } else if engine == "Apple Intelligence" {
-            result = try await parseWithAppleIntelligence(text: emailText, systemPrompt: dynamicPrompt)
+            result = try await parseWithAppleIntelligence(text: cleanedText, systemPrompt: dynamicPrompt)
         } else {
             #if canImport(MLX)
-            result = try await parseWithLocalMLX(text: emailText, systemPrompt: dynamicPrompt)
+            result = try await parseWithLocalMLX(text: cleanedText, systemPrompt: dynamicPrompt, tripStartDate: tripStartDate)
             #else
             throw ParserError.missingEngine
             #endif
@@ -165,6 +284,7 @@ class ItineraryParserService {
         request.httpMethod = "POST"
         request.addValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 60
         
         let schema: [String: Any] = [
             "type": "json_schema",
@@ -219,75 +339,65 @@ class ItineraryParserService {
         guard let httpResponse = response as? HTTPURLResponse else {
             throw ParserError.networkError("Invalid response")
         }
+        
+        // Handle rate limiting with retry
+        if httpResponse.statusCode == 429 {
+            print("[OpenAI] Rate limited, waiting 2 seconds before retry...")
+            try await Task.sleep(nanoseconds: 2_000_000_000)
+            return try await parseWithOpenAI(text: text, systemPrompt: systemPrompt)
+        }
+        
         guard httpResponse.statusCode == 200 else {
             let errorString = String(data: data, encoding: .utf8) ?? "Unknown Error"
-            print("OpenAI Error: \(errorString)")
+            print("[OpenAI] Error (\(httpResponse.statusCode)): \(errorString)")
             throw ParserError.networkError("Status \(httpResponse.statusCode)")
         }
         
         struct OpenAIResponse: Codable {
             struct Choice: Codable {
                 struct Message: Codable {
-                    let content: String
+                    let content: String?
+                    let refusal: String?
                 }
                 let message: Message
+                let finish_reason: String?
             }
             let choices: [Choice]
         }
         
         let openAIResponse = try JSONDecoder().decode(OpenAIResponse.self, from: data)
-        guard let contentString = openAIResponse.choices.first?.message.content else {
+        guard let choice = openAIResponse.choices.first else {
+            throw ParserError.parsingError("No choices in response")
+        }
+        
+        // Check for refusal
+        if let refusal = choice.message.refusal {
+            print("[OpenAI] Model refused: \(refusal)")
+            return ExtractionResult(relevant: false, items: [])
+        }
+        
+        guard let contentString = choice.message.content else {
             throw ParserError.parsingError("No content in response")
         }
         
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .custom { decoder in
-            let container = try decoder.singleValueContainer()
-            let dateString = try container.decode(String.self)
-            
-            let formatter = ISO8601DateFormatter()
-            if let date = formatter.date(from: dateString) {
-                return date
-            }
-            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            if let date = formatter.date(from: dateString) {
-                return date
-            }
-            
-            // Support ISO8601 without timezone (local time)
-            formatter.formatOptions = [.withYear, .withMonth, .withDay, .withTime, .withDashSeparatorInDate, .withColonSeparatorInTime]
-            if let date = formatter.date(from: dateString) {
-                return date
-            }
-            
-            let fallback = DateFormatter()
-            fallback.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
-            if let date = fallback.date(from: dateString) {
-                return date
-            }
-            
-            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Cannot decode date string \(dateString)")
-        }
+        print("[OpenAI] Response: \(contentString.prefix(200))...")
         
         if let contentData = contentString.data(using: .utf8) {
-            let result = try decoder.decode(ExtractionResult.self, from: contentData)
-            return result
+            do {
+                let result = try customDateDecoder.decode(ExtractionResult.self, from: contentData)
+                return result
+            } catch {
+                print("[OpenAI] JSON decode error: \(error)")
+                // Try to extract just the items array as fallback
+                struct LegacyResult: Codable { let items: [ExtractedItineraryItem] }
+                if let legacyResult = try? customDateDecoder.decode(LegacyResult.self, from: contentData) {
+                    return ExtractionResult(relevant: !legacyResult.items.isEmpty, items: legacyResult.items)
+                }
+                throw ParserError.parsingError("Failed to decode LLM response: \(error.localizedDescription)")
+            }
         }
         
         throw ParserError.parsingError("Could not decode content string to data")
-    }
-    
-    /// Strips HTML tags and collapses excessive whitespace to reduce token count
-    private func stripHTMLAndCondense(_ text: String) -> String {
-        // Remove HTML tags
-        var cleaned = text.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
-        // Remove URLs (they waste tokens)
-        cleaned = cleaned.replacingOccurrences(of: "https?://[^\\s]+", with: "", options: .regularExpression)
-        // Collapse whitespace
-        cleaned = cleaned.replacingOccurrences(of: "[\\s]+", with: " ", options: .regularExpression)
-        // Trim
-        cleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
-        return cleaned
     }
     
     // MARK: - Apple Intelligence
@@ -306,9 +416,6 @@ class ItineraryParserService {
                 appleIntelligenceSession = session
             }
             
-            // Aggressively strip HTML/URLs and condense whitespace to save tokens
-            let cleanedText = stripHTMLAndCondense(text)
-            
             // Extract just the CONTEXT INFO portion from the full systemPrompt
             var contextLine = ""
             if let range = systemPrompt.range(of: "CONTEXT INFO:") {
@@ -320,9 +427,8 @@ class ItineraryParserService {
                 }
             }
             
-            // Hard cap at 1500 chars to stay well within 4096 token limit
-            let maxEmailChars = 1500
-            let truncatedText = String(cleanedText.prefix(maxEmailChars))
+            // Hard cap at 1500 chars for Apple Intelligence (much smaller context window)
+            let truncatedText = String(text.prefix(1500))
             
             let prompt = "\(condensedSystemPrompt)\n\(contextLine)\n\nEMAIL:\n\(truncatedText)"
             
@@ -344,25 +450,7 @@ class ItineraryParserService {
                     throw ParserError.parsingError("Failed to decode extracted string to Data.")
                 }
                 
-                let decoder = JSONDecoder()
-                decoder.dateDecodingStrategy = .custom { decoder in
-                    let container = try decoder.singleValueContainer()
-                    let dateString = try container.decode(String.self)
-                    let formatter = ISO8601DateFormatter()
-                    if let date = formatter.date(from: dateString) { return date }
-                    
-                    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-                    if let date = formatter.date(from: dateString) { return date }
-                    
-                    formatter.formatOptions = [.withYear, .withMonth, .withDay, .withTime, .withDashSeparatorInDate, .withColonSeparatorInTime]
-                    if let date = formatter.date(from: dateString) { return date }
-                    
-                    let fallback = DateFormatter()
-                    fallback.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
-                    if let date = fallback.date(from: dateString) { return date }
-                    
-                    throw DecodingError.dataCorruptedError(in: container, debugDescription: "Invalid date: \(dateString)")
-                }
+                let decoder = customDateDecoder
                 
                 // Try to decode as ExtractionResult (with relevant field)
                 if let result = try? decoder.decode(ExtractionResult.self, from: contentData) {
@@ -403,7 +491,7 @@ class ItineraryParserService {
     // MARK: - MLX
     
     #if canImport(MLX)
-    private func parseWithLocalMLX(text: String, systemPrompt: String) async throws -> ExtractionResult {
+    private func parseWithLocalMLX(text: String, systemPrompt: String, tripStartDate: Date?) async throws -> ExtractionResult {
         // Finalized MLX Swift Port Structure
         print("[ItineraryParserService] Initializing MLX Swift Engine...")
         
@@ -414,12 +502,12 @@ class ItineraryParserService {
         // Simulating the MLX computation time and generating a robust fallback for the demo
         try await Task.sleep(nanoseconds: 2_000_000_000)
         
-        let now = Date()
+        let baseDate = tripStartDate ?? Date()
         
         let dummyItem = ExtractedItineraryItem(
             title: "MLX Processed Flight",
-            startTime: now.addingTimeInterval(3600 * 24),
-            endTime: now.addingTimeInterval(3600 * 26),
+            startTime: baseDate.addingTimeInterval(3600 * 12),
+            endTime: baseDate.addingTimeInterval(3600 * 14),
             locationName: "Local LLM Port",
             provider: "MLX Local",
             bookingReference: "MLX-SWIFT-1",
@@ -430,7 +518,7 @@ class ItineraryParserService {
         return ExtractionResult(relevant: true, items: [dummyItem])
     }
     #else
-    private func parseWithLocalMLX(text: String, systemPrompt: String) async throws -> ExtractionResult {
+    private func parseWithLocalMLX(text: String, systemPrompt: String, tripStartDate: Date?) async throws -> ExtractionResult {
         throw ParserError.missingEngine
     }
     #endif
