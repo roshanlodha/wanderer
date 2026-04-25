@@ -53,6 +53,17 @@ struct TimelineItemView: View {
                         .foregroundColor(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+
+                if let offset = item.timeZoneGMTOffset, !offset.isEmpty {
+                    HStack(spacing: 4) {
+                        Image(systemName: "globe")
+                            .foregroundColor(.teal)
+                            .font(.caption)
+                        Text("GMT\(offset)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
                 
                 if let provider = item.provider, !provider.isEmpty {
                     HStack(spacing: 4) {

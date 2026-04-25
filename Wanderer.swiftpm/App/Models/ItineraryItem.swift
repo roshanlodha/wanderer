@@ -29,6 +29,7 @@ final class ItineraryItem {
     var title: String
     var startTime: Date
     var endTime: Date?
+    var timeZoneGMTOffset: String?
     var locationName: String
     var bookingReference: String?
     var alternativeReference: String?
@@ -41,10 +42,11 @@ final class ItineraryItem {
     var trip: Trip?
     var emailSource: EmailSource?
     
-    init(title: String, startTime: Date, endTime: Date? = nil, locationName: String, bookingReference: String? = nil, alternativeReference: String? = nil, provider: String? = nil, notes: String? = nil, rawTextSource: String? = nil, travelMode: TravelMode) {
+    init(title: String, startTime: Date, endTime: Date? = nil, timeZoneGMTOffset: String? = nil, locationName: String, bookingReference: String? = nil, alternativeReference: String? = nil, provider: String? = nil, notes: String? = nil, rawTextSource: String? = nil, travelMode: TravelMode) {
         self.title = title
         self.startTime = startTime
         self.endTime = endTime
+        self.timeZoneGMTOffset = timeZoneGMTOffset
         self.locationName = locationName
         self.bookingReference = bookingReference
         self.alternativeReference = alternativeReference

@@ -8,6 +8,8 @@ CRITICAL EXTRACTION RULES & EDGE CASES:
 - All times MUST be in standard ISO 8601 format (e.g., "2026-05-04T15:00:00").
 - Year Inference: If the year is omitted in the text, assume the year of the trip based on context.
 - Timezones: Use the LOCAL time at the specific destination for all events. Ignore timezone abbreviations (like IST, BST) when formatting the ISO string; the time should reflect the clock time locally.
+- You MUST also return `timeZoneGMTOffset` for every item. This field is REQUIRED whenever you can infer a location or local timezone. Infer it from the event location if the email does not explicitly state it.
+- `timeZoneGMTOffset` MUST be highly standardized and use GMT offset notation only: `+0`, `+1`, `-5`, `+5:30`, `+9`. Do not return `GMT+1`, `UTC+1`, abbreviations, city names, or IANA identifiers.
 - Missing End Times: If a bus or train lacks an arrival time, estimate it based on provided duration, or leave `endTime` null if impossible to deduce. 
 - Hotel Defaults: If explicit times are missing, use 15:00:00 for check-in (`startTime`) and 11:00:00 for check-out (`endTime`). 
 - IMPORTANT: Ensure any extracted dates (especially if year is missing) are mapped correctly to match the trip dates if they refer to the same days/months. Do NOT assume 1970 or current year blindly if it contradicts the trip dates.
@@ -51,6 +53,7 @@ EXPECTED SCHEMA:
       "title": "String",
       "startTime": "ISO 8601 Date String",
       "endTime": "ISO 8601 Date String (or null)",
+      "timeZoneGMTOffset": "String like +1 or +5:30",
       "locationName": "String",
       "provider": "String (optional)",
       "bookingReference": "String (optional)",
@@ -69,6 +72,7 @@ GOLD STANDARD EXAMPLE OUTPUT:
       "title": "Flight VS303: DEL to LHR",
       "startTime": "2026-05-04T02:05:00",
       "endTime": "2026-05-04T07:20:00",
+      "timeZoneGMTOffset": "+1",
       "locationName": "London Heathrow Airport (Hounslow, UK)",
       "provider": "Virgin Atlantic",
       "bookingReference": "DA2ITC",
@@ -80,6 +84,7 @@ GOLD STANDARD EXAMPLE OUTPUT:
       "title": "Check-in: Four Points Flex by Sheraton London Euston",
       "startTime": "2026-05-04T15:00:00",
       "endTime": "2026-05-05T12:00:00",
+      "timeZoneGMTOffset": "+1",
       "locationName": "8-11 Upper Woburn Place, London, WC1H 0JW, UK",
       "provider": "Marriott",
       "bookingReference": "H-Q37FKZXZT9M3",
@@ -91,6 +96,7 @@ GOLD STANDARD EXAMPLE OUTPUT:
       "title": "Train: London to Glasgow",
       "startTime": "2026-05-05T13:30:00",
       "endTime": "2026-05-05T18:01:00",
+      "timeZoneGMTOffset": "+1",
       "locationName": "Glasgow Central Station (Gordon St, Glasgow G1 3SQ)",
       "provider": "Avanti West Coast",
       "bookingReference": "20094934",
@@ -102,6 +108,7 @@ GOLD STANDARD EXAMPLE OUTPUT:
       "title": "Check-in: Glampcoe Pod",
       "startTime": "2026-05-06T15:00:00",
       "endTime": "2026-05-07T11:00:00",
+      "timeZoneGMTOffset": "+1",
       "locationName": "Lorn Drive, Glencoe, PH49 4HR, Scotland",
       "provider": "Airbnb",
       "bookingReference": "40cil8jfvfail6e8osfgg7pwikybz1wqoo3t",
@@ -113,6 +120,7 @@ GOLD STANDARD EXAMPLE OUTPUT:
       "title": "Dinner at Glas",
       "startTime": "2026-05-09T18:00:00",
       "endTime": "2026-05-09T20:00:00",
+      "timeZoneGMTOffset": "+1",
       "locationName": "15/16 Chatham Street, Dublin 2, Ireland",
       "provider": "OpenTable",
       "bookingReference": "65450",
@@ -124,6 +132,7 @@ GOLD STANDARD EXAMPLE OUTPUT:
       "title": "Quinta da Bichinha Wedding & Events",
       "startTime": "2026-05-11T12:00:00",
       "endTime": "2026-05-13T12:00:00",
+      "timeZoneGMTOffset": "+1",
       "locationName": "Estrada de Vila Chã, 2580-413 Alenquer, Portugal",
       "provider": null,
       "bookingReference": null,
@@ -151,6 +160,7 @@ JSON SCHEMA TO FOLLOW EXACTLY:
       "title": "String",
       "startTime": "2026-05-04T15:00:00",
       "endTime": "2026-05-05T11:00:00",
+      "timeZoneGMTOffset": "+1",
       "locationName": "String",
       "provider": "String or null",
       "bookingReference": "String or null",
@@ -160,7 +170,7 @@ JSON SCHEMA TO FOLLOW EXACTLY:
     }
   ]
 }
-RULES: Use local time. Split layovers. Hotel: check-in 15:00, check-out 11:00. Map any extra/secondary reference number into "alternativeReference" (not "bookingReference"). If the email is marketing/promo or has no travel data, set "relevant": false and "items": [].
+RULES: Use local time. Every item must include `timeZoneGMTOffset`, inferred from location if not explicit. The format must be GMT offset only like `+1`, `-5`, `+5:30`. Split layovers. Hotel: check-in 15:00, check-out 11:00. Map any extra/secondary reference number into "alternativeReference" (not "bookingReference"). If the email is marketing/promo or has no travel data, set "relevant": false and "items": [].
 
 [CONTEXT_TEMPLATE]
 CONTEXT INFO:

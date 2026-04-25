@@ -22,8 +22,12 @@ struct TripDetailView: View {
     @State private var extractionTask: Task<Void, Never>?
     @State private var classificationTask: Task<Void, Never>?
     @State private var showTripSettingsSheet = false
-    @State private var selectedTab: EmailTab = .itinerary
+    @State private var selectedEmailTab: EmailTab = .itinerary
+    @State private var selectedDetailTab: DetailTab = .overview
     @State private var editingItem: ItineraryItem?
+    @State private var exportDocument: TripTransferDocument?
+    @State private var showTripExporter = false
+    @State private var showTripImporter = false
     @AppStorage("classificationMode") private var classificationMode: String = "Smart"
     
     // Manual add form state
@@ -55,6 +59,14 @@ struct TripDetailView: View {
         !itineraryEmails.isEmpty || !importantDocuments.isEmpty || !otherEmails.isEmpty
     }
 
+    private var sanitizedTripFileName: String {
+        let cleaned = trip.name
+            .lowercased()
+            .replacingOccurrences(of: "[^a-z0-9]+", with: "-", options: .regularExpression)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        return cleaned.isEmpty ? "wanderer-trip" : cleaned
+    }
+
     private enum EmailTab: String, CaseIterable {
         case itinerary
         case important
@@ -77,6 +89,28 @@ struct TripDetailView: View {
         }
     }
 
+    private enum DetailTab: String, CaseIterable {
+        case overview
+        case calendar
+        case map
+
+        var title: String {
+            switch self {
+            case .overview: return "Overview"
+            case .calendar: return "Calendar"
+            case .map: return "Map"
+            }
+        }
+
+        var systemImage: String {
+            switch self {
+            case .overview: return "list.bullet.rectangle"
+            case .calendar: return "calendar"
+            case .map: return "map"
+            }
+        }
+    }
+
     private enum PersistedEmailCategory: String {
         case itinerary
         case important
@@ -86,25 +120,10 @@ struct TripDetailView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 0) {
-                // Progress indicator
-                if isBusy {
-                    syncProgressView
-                }
-                
-                // Empty state
-                if !isBusy && trip.items.isEmpty && !hasAnyEmailSections {
-                    emptyStateView
-                } else {
-                    // Itinerary items
-                    if !groupedItems.isEmpty {
-                        itinerarySection
-                    }
-                    
-                    // Fetched email previews
-                    if hasAnyEmailSections {
-                        emailsSection
-                    }
-                }
+                detailTabPicker
+                    .padding(.bottom, 16)
+
+                activeDetailContent
             }
             .padding()
         }
@@ -118,6 +137,25 @@ struct TripDetailView: View {
                 } label: {
                     Image(systemName: "gear")
                         .foregroundColor(.gray)
+                        .font(.title3)
+                }
+
+                Menu {
+                    Button {
+                        exportDocument = TripTransferDocument(payload: TripTransferPayload(trip: trip))
+                        showTripExporter = true
+                    } label: {
+                        Label("Export Trip JSON", systemImage: "square.and.arrow.up")
+                    }
+
+                    Button {
+                        showTripImporter = true
+                    } label: {
+                        Label("Import Trip JSON", systemImage: "square.and.arrow.down")
+                    }
+                } label: {
+                    Image(systemName: "arrow.left.arrow.right.circle")
+                        .foregroundColor(.orange)
                         .font(.title3)
                 }
                 
@@ -159,7 +197,95 @@ struct TripDetailView: View {
         .sheet(isPresented: $showTripSettingsSheet) {
             tripSettingsSheet
         }
+        .fileExporter(
+            isPresented: $showTripExporter,
+            document: exportDocument,
+            contentType: .wandererTripJSON,
+            defaultFilename: sanitizedTripFileName
+        ) { result in
+            if case .failure(let error) = result {
+                syncError = "Trip export failed: \(error.localizedDescription)"
+            }
+        }
+        .fileImporter(
+            isPresented: $showTripImporter,
+            allowedContentTypes: [.wandererTripJSON, .json]
+        ) { result in
+            importTrip(from: result)
+        }
         .onAppear(perform: loadPersistedEmails)
+    }
+
+    @ViewBuilder
+    private var activeDetailContent: some View {
+        switch selectedDetailTab {
+        case .overview:
+            overviewContent
+        case .calendar:
+            placeholderTab(
+                title: "Calendar",
+                systemImage: "calendar",
+                description: "Calendar view will live here."
+            )
+        case .map:
+            placeholderTab(
+                title: "Map",
+                systemImage: "map",
+                description: "Map view will live here."
+            )
+        }
+    }
+
+    private var overviewContent: some View {
+        VStack(spacing: 0) {
+            if isBusy {
+                syncProgressView
+            }
+
+            if !isBusy && trip.items.isEmpty && !hasAnyEmailSections {
+                emptyStateView
+            } else {
+                if !groupedItems.isEmpty {
+                    itinerarySection
+                }
+
+                if hasAnyEmailSections {
+                    emailsSection
+                }
+            }
+        }
+    }
+
+    private var detailTabPicker: some View {
+        HStack(spacing: 8) {
+            ForEach(DetailTab.allCases, id: \.self) { tab in
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        selectedDetailTab = tab
+                    }
+                } label: {
+                    Label(tab.title, systemImage: tab.systemImage)
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .padding(.horizontal, 12)
+                        .background(selectedDetailTab == tab ? Color.orange : Color(.secondarySystemGroupedBackground))
+                        .foregroundColor(selectedDetailTab == tab ? .white : .primary)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private func placeholderTab(title: String, systemImage: String, description: String) -> some View {
+        ContentUnavailableView {
+            Label(title, systemImage: systemImage)
+        } description: {
+            Text(description)
+        }
+        .frame(maxWidth: .infinity, minHeight: 320)
     }
     
     // MARK: - Itinerary Section
@@ -312,7 +438,7 @@ struct TripDetailView: View {
             }
             .padding(.horizontal)
             
-            if selectedTab == .itinerary {
+            if selectedEmailTab == .itinerary {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Text("Itinerary Emails")
@@ -355,7 +481,7 @@ struct TripDetailView: View {
                 .padding(.top, 8)
             }
             
-            if selectedTab == .important {
+            if selectedEmailTab == .important {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Text("Important Documents")
@@ -384,16 +510,21 @@ struct TripDetailView: View {
                             .padding()
                     } else {
                         ForEach(importantDocuments) { email in
-                            secondaryEmailRow(email, label: "Important", labelColor: .indigo) {
-                                moveToItinerary(email: email)
-                            }
+                            secondaryEmailRow(
+                                email,
+                                label: "Important",
+                                labelColor: .indigo,
+                                primaryAction: {
+                                    moveToItinerary(email: email)
+                                }
+                            )
                         }
                     }
                 }
                 .padding(.top, 8)
             }
             
-            if selectedTab == .other {
+            if selectedEmailTab == .other {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Text("Other")
@@ -422,9 +553,21 @@ struct TripDetailView: View {
                             .padding()
                     } else {
                         ForEach(otherEmails) { email in
-                            secondaryEmailRow(email, label: "Rejected", labelColor: .gray) {
-                                moveToItinerary(email: email)
-                            }
+                            secondaryEmailRow(
+                                email,
+                                label: "Rejected",
+                                labelColor: .gray,
+                                primaryActionTitle: "Include in Itinerary",
+                                primaryActionSystemImage: "plus.circle.fill",
+                                primaryAction: {
+                                    moveToItinerary(email: email)
+                                },
+                                secondaryActionTitle: "Move to Important",
+                                secondaryActionSystemImage: "arrow.up.circle.fill",
+                                secondaryAction: {
+                                    moveToImportant(email: email)
+                                }
+                            )
                         }
                     }
                 }
@@ -436,7 +579,7 @@ struct TripDetailView: View {
     private func tabButton(_ tab: EmailTab, count: Int) -> some View {
         Button {
             withAnimation(.easeInOut(duration: 0.2)) {
-                selectedTab = tab
+                selectedEmailTab = tab
             }
         } label: {
             HStack(spacing: 6) {
@@ -450,14 +593,14 @@ struct TripDetailView: View {
                     .fontWeight(.semibold)
                     .padding(.horizontal, 7)
                     .padding(.vertical, 3)
-                    .background(selectedTab == tab ? Color.white.opacity(0.22) : Color(.secondarySystemBackground))
+                    .background(selectedEmailTab == tab ? Color.white.opacity(0.22) : Color(.secondarySystemBackground))
                     .clipShape(Capsule())
             }
-            .foregroundColor(selectedTab == tab ? .white : .primary)
+            .foregroundColor(selectedEmailTab == tab ? .white : .primary)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 10)
             .padding(.horizontal, 12)
-            .background(selectedTab == tab ? tab.tint : Color(.secondarySystemGroupedBackground))
+            .background(selectedEmailTab == tab ? tab.tint : Color(.secondarySystemGroupedBackground))
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
         .buttonStyle(.plain)
@@ -556,7 +699,17 @@ struct TripDetailView: View {
     }
 
     @ViewBuilder
-    private func secondaryEmailRow(_ email: FetchedEmail, label: String, labelColor: Color, includeAction: @escaping () -> Void) -> some View {
+    private func secondaryEmailRow(
+        _ email: FetchedEmail,
+        label: String,
+        labelColor: Color,
+        primaryActionTitle: String = "Include in Itinerary",
+        primaryActionSystemImage: String = "plus.circle.fill",
+        primaryAction: @escaping () -> Void,
+        secondaryActionTitle: String? = nil,
+        secondaryActionSystemImage: String? = nil,
+        secondaryAction: (() -> Void)? = nil
+    ) -> some View {
         let isExpanded = expandedEmailIds.contains(email.id)
 
         VStack(alignment: .leading, spacing: 4) {
@@ -604,14 +757,26 @@ struct TripDetailView: View {
 
                 VStack(spacing: 8) {
                     Button {
-                        includeAction()
+                        primaryAction()
                     } label: {
-                        Label("Include in Itinerary", systemImage: "plus.circle.fill")
+                        Label(primaryActionTitle, systemImage: primaryActionSystemImage)
                             .font(.caption)
                             .fontWeight(.semibold)
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
+
+                    if let secondaryActionTitle, let secondaryActionSystemImage, let secondaryAction {
+                        Button {
+                            secondaryAction()
+                        } label: {
+                            Label(secondaryActionTitle, systemImage: secondaryActionSystemImage)
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
 
                     Button {
                         removeEmail(email)
@@ -843,10 +1008,102 @@ struct TripDetailView: View {
         persistEmailCollections()
     }
 
+    private func moveToImportant(email: FetchedEmail) {
+        withAnimation {
+            itineraryEmails.removeAll { $0.id == email.id }
+            otherEmails.removeAll { $0.id == email.id }
+
+            if !importantDocuments.contains(where: { $0.id == email.id }) {
+                importantDocuments.append(email)
+                importantDocuments.sort { $0.date > $1.date }
+            }
+            selectedEmailTab = .important
+        }
+        persistEmailCollections()
+    }
+
     private func appendEmailIfNeeded(_ email: FetchedEmail, to collection: inout [FetchedEmail]) {
         if !collection.contains(where: { $0.id == email.id }) {
             collection.append(email)
             collection.sort { $0.date > $1.date }
+        }
+    }
+
+    private func importTrip(from result: Result<URL, Error>) {
+        do {
+            let url = try result.get()
+            let shouldStopAccess = url.startAccessingSecurityScopedResource()
+            defer {
+                if shouldStopAccess {
+                    url.stopAccessingSecurityScopedResource()
+                }
+            }
+
+            let data = try Data(contentsOf: url)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let payload = try decoder.decode(TripTransferPayload.self, from: data)
+
+            applyImportedTrip(payload)
+            loadPersistedEmails()
+            syncStatus = "Imported \(payload.items.count) items and \(payload.emailSources.count) emails from JSON."
+        } catch {
+            syncError = "Trip import failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func applyImportedTrip(_ payload: TripTransferPayload) {
+        trip.name = payload.tripName
+        trip.startDate = payload.startDate
+        trip.endDate = payload.endDate
+        trip.ignoreEmailsBeforeDate = payload.ignoreEmailsBeforeDate
+        trip.emailSearchStartDate = payload.emailSearchStartDate
+        trip.emailSearchEndDate = payload.emailSearchEndDate
+
+        for item in trip.items {
+            modelContext.delete(item)
+        }
+        trip.items.removeAll()
+
+        for source in trip.emailSources {
+            modelContext.delete(source)
+        }
+        trip.emailSources.removeAll()
+
+        for itemPayload in payload.items {
+            let mode = TravelMode(rawValue: itemPayload.travelMode) ?? .other
+            let item = ItineraryItem(
+                title: itemPayload.title,
+                startTime: itemPayload.startTime,
+                endTime: itemPayload.endTime,
+                timeZoneGMTOffset: itemPayload.timeZoneGMTOffset,
+                locationName: itemPayload.locationName,
+                bookingReference: itemPayload.bookingReference,
+                alternativeReference: itemPayload.alternativeReference,
+                provider: itemPayload.provider,
+                notes: itemPayload.notes,
+                rawTextSource: itemPayload.rawTextSource,
+                travelMode: mode
+            )
+            item.id = itemPayload.id
+            trip.items.append(item)
+        }
+
+        for sourcePayload in payload.emailSources {
+            let source = EmailSource(
+                externalID: sourcePayload.externalID,
+                sender: sourcePayload.sender,
+                subject: sourcePayload.subject,
+                dateReceived: sourcePayload.dateReceived,
+                snippet: sourcePayload.snippet,
+                bodyText: sourcePayload.bodyText,
+                categoryRaw: sourcePayload.categoryRaw,
+                extractionStatusRaw: sourcePayload.extractionStatusRaw,
+                extractionMessage: sourcePayload.extractionMessage,
+                extractedItemCount: sourcePayload.extractedItemCount,
+                isVisibleInTripEmails: sourcePayload.isVisibleInTripEmails
+            )
+            trip.emailSources.append(source)
         }
     }
     
@@ -1128,6 +1385,7 @@ struct TripDetailView: View {
                 await MainActor.run {
                     itineraryEmails = itinerary
                     importantDocuments = []
+                    otherEmails = []
                     emailStatuses = [:]
                     for email in itinerary {
                         emailStatuses[email.id] = .pending
@@ -1159,6 +1417,7 @@ struct TripDetailView: View {
 
             var itinerary: [FetchedEmail] = []
             var important: [FetchedEmail] = []
+            var other: [FetchedEmail] = []
             var irrelevantCount = 0
             var wasClassificationCancelled = false
 
@@ -1182,6 +1441,7 @@ struct TripDetailView: View {
                             itinerary.append(email)
                         }
                     } else {
+                        other.append(email)
                         irrelevantCount += 1
                     }
                 } catch {
@@ -1198,10 +1458,14 @@ struct TripDetailView: View {
             await MainActor.run {
                 itineraryEmails = itinerary.sorted { $0.date > $1.date }
                 importantDocuments = important.sorted { $0.date > $1.date }
+                otherEmails = other.sorted { $0.date > $1.date }
                 // Initialize all statuses to pending
                 emailStatuses = [:]
                 for email in itinerary {
                     emailStatuses[email.id] = .pending
+                }
+                for email in other {
+                    emailStatuses[email.id] = .irrelevant("Not trip-related for this trip")
                 }
                 persistEmailCollections()
                 isFetchingEmails = false

@@ -13,6 +13,7 @@ struct ExtractedItineraryItem: Codable {
     let title: String?
     let startTime: Date?
     let endTime: Date?
+    let timeZoneGMTOffset: String?
     let locationName: String?
     let provider: String?
     let bookingReference: String?
@@ -218,6 +219,57 @@ class ItineraryParserService {
     }
     
     // MARK: - Duplicate Detection
+
+    private func normalizedGMTOffset(_ rawValue: String?) -> String? {
+        guard var value = rawValue?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
+            return nil
+        }
+
+        value = value.uppercased()
+        value = value.replacingOccurrences(of: "UTC", with: "")
+        value = value.replacingOccurrences(of: "GMT", with: "")
+        value = value.replacingOccurrences(of: " ", with: "")
+
+        if value == "Z" || value == "+0" || value == "-0" || value == "+00" || value == "-00" || value == "+00:00" || value == "-00:00" {
+            return "+0"
+        }
+
+        guard let first = value.first, first == "+" || first == "-" else {
+            return nil
+        }
+
+        let sign = String(first)
+        let remainder = String(value.dropFirst())
+        guard !remainder.isEmpty else { return nil }
+
+        let hourPart: String
+        let minutePart: String?
+
+        if remainder.contains(":") {
+            let parts = remainder.split(separator: ":", omittingEmptySubsequences: false)
+            guard parts.count == 2 else { return nil }
+            hourPart = String(parts[0])
+            minutePart = String(parts[1])
+        } else if remainder.count > 2 {
+            hourPart = String(remainder.prefix(2))
+            minutePart = String(remainder.dropFirst(2))
+        } else {
+            hourPart = remainder
+            minutePart = nil
+        }
+
+        guard let hours = Int(hourPart), (0...14).contains(hours) else { return nil }
+
+        if let minutePart, !minutePart.isEmpty {
+            guard let minutes = Int(minutePart), minutes >= 0 && minutes < 60 else { return nil }
+            if minutes == 0 {
+                return "\(sign)\(hours)"
+            }
+            return String(format: "%@%d:%02d", sign, hours, minutes)
+        }
+
+        return "\(sign)\(hours)"
+    }
     
     /// Checks if a new item is a duplicate of any existing items in the trip.
     /// Two items are considered duplicates if they share the same travel mode and
@@ -326,6 +378,7 @@ class ItineraryParserService {
                 title: item.title ?? "Unknown Travel Event",
                 startTime: start,
                 endTime: item.endTime,
+                timeZoneGMTOffset: normalizedGMTOffset(item.timeZoneGMTOffset),
                 locationName: item.locationName ?? "Unknown Location",
                 bookingReference: item.bookingReference,
                 alternativeReference: item.alternativeReference,
