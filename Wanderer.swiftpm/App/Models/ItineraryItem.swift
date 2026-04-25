@@ -24,9 +24,11 @@ final class ItineraryItem {
     var id: UUID = UUID()
     var title: String
     var startTime: Date
-    var endTime: Date
+    var endTime: Date?
     var locationName: String
     var bookingReference: String?
+    var provider: String?
+    var notes: String?
     var rawTextSource: String?
     
     var travelMode: TravelMode
@@ -34,12 +36,14 @@ final class ItineraryItem {
     var trip: Trip?
     var emailSource: EmailSource?
     
-    init(title: String, startTime: Date, endTime: Date, locationName: String, bookingReference: String? = nil, rawTextSource: String? = nil, travelMode: TravelMode) {
+    init(title: String, startTime: Date, endTime: Date? = nil, locationName: String, bookingReference: String? = nil, provider: String? = nil, notes: String? = nil, rawTextSource: String? = nil, travelMode: TravelMode) {
         self.title = title
         self.startTime = startTime
         self.endTime = endTime
         self.locationName = locationName
         self.bookingReference = bookingReference
+        self.provider = provider
+        self.notes = notes
         self.rawTextSource = rawTextSource
         self.travelMode = travelMode
     }

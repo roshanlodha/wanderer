@@ -12,9 +12,11 @@ struct TimelineItemView: View {
                 Text(item.startTime, format: .dateTime.hour().minute())
                     .font(.subheadline)
                     .fontWeight(.bold)
-                Text(item.endTime, format: .dateTime.hour().minute())
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                if let endTime = item.endTime {
+                    Text(endTime, format: .dateTime.hour().minute())
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
             }
             .frame(width: 60, alignment: .trailing)
             
@@ -52,6 +54,17 @@ struct TimelineItemView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 
+                if let provider = item.provider, !provider.isEmpty {
+                    HStack(spacing: 4) {
+                        Image(systemName: "building.2")
+                            .foregroundColor(.indigo)
+                            .font(.caption)
+                        Text(provider)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                
                 if let ref = item.bookingReference, !ref.isEmpty {
                     HStack(spacing: 4) {
                         Image(systemName: "ticket")
@@ -60,6 +73,19 @@ struct TimelineItemView: View {
                         Text("Ref: \(ref)")
                             .font(.caption)
                             .foregroundColor(.secondary)
+                    }
+                }
+                
+                if let notes = item.notes, !notes.isEmpty {
+                    HStack(alignment: .top, spacing: 4) {
+                        Image(systemName: "note.text")
+                            .foregroundColor(.blue)
+                            .font(.caption)
+                            .padding(.top, 2)
+                        Text(notes)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 

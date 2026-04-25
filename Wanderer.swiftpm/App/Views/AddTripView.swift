@@ -19,7 +19,10 @@ struct AddTripView: View {
             .navigationTitle("New Trip")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button(action: { dismiss() }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundColor(.red)
+                    }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Add") {

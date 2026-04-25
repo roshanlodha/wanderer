@@ -12,10 +12,12 @@ import MLX
 struct ExtractedItineraryItem: Codable {
     let title: String
     let startTime: Date
-    let endTime: Date
+    let endTime: Date?
     let locationName: String
+    let provider: String?
     let bookingReference: String?
     let travelMode: TravelMode
+    let notes: String?
 }
 
 class ItineraryParserService {
@@ -70,6 +72,8 @@ class ItineraryParserService {
                 endTime: item.endTime,
                 locationName: item.locationName,
                 bookingReference: item.bookingReference,
+                provider: item.provider,
+                notes: item.notes,
                 rawTextSource: emailText,
                 travelMode: item.travelMode
             )
@@ -102,15 +106,17 @@ class ItineraryParserService {
                                 "properties": [
                                     "title": ["type": "string"],
                                     "startTime": ["type": "string", "description": "ISO8601 string"],
-                                    "endTime": ["type": "string", "description": "ISO8601 string"],
+                                    "endTime": ["type": ["string", "null"], "description": "ISO8601 string"],
                                     "locationName": ["type": "string"],
+                                    "provider": ["type": ["string", "null"]],
                                     "bookingReference": ["type": ["string", "null"]],
                                     "travelMode": [
                                         "type": "string",
                                         "enum": ["Flight", "Hotel", "Bus", "Train", "Activity"]
-                                    ]
+                                    ],
+                                    "notes": ["type": ["string", "null"]]
                                 ],
-                                "required": ["title", "startTime", "endTime", "locationName", "bookingReference", "travelMode"],
+                                "required": ["title", "startTime", "endTime", "locationName", "provider", "bookingReference", "travelMode", "notes"],
                                 "additionalProperties": false
                             ]
                         ]
@@ -285,8 +291,10 @@ class ItineraryParserService {
             startTime: now.addingTimeInterval(3600 * 24),
             endTime: now.addingTimeInterval(3600 * 26),
             locationName: "Local LLM Port",
+            provider: "MLX Local",
             bookingReference: "MLX-SWIFT-1",
-            travelMode: .flight
+            travelMode: .flight,
+            notes: nil
         )
         
         return [dummyItem]

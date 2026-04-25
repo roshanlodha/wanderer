@@ -27,11 +27,25 @@ struct TripDetailView: View {
         ScrollView {
             VStack(spacing: 0) {
                 if trip.items.isEmpty && fetchedEmails.isEmpty {
-                    ContentUnavailableView(
-                        "No Itinerary",
-                        systemImage: "calendar.badge.plus",
-                        description: Text("Sync your email or add items manually.")
-                    )
+                    ContentUnavailableView {
+                        Label("No Itinerary", systemImage: "calendar.badge.plus")
+                    } description: {
+                        Text("Sync your email or add items manually.")
+                    } actions: {
+                        HStack(spacing: 16) {
+                            if hasConnectedEmail {
+                                Button(action: { syncEmailsForTrip() }) {
+                                    Label("Sync Email", systemImage: "arrow.triangle.2.circlepath")
+                                }
+                                .buttonStyle(.borderedProminent)
+                            }
+                            Button(action: { /* Add Manually Action */ }) {
+                                Label("Add Manually", systemImage: "plus")
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                        .padding(.top, 8)
+                    }
                 } else {
                     // Itinerary items
                     ForEach(groupedItems, id: \.0) { date, items in
@@ -166,10 +180,15 @@ struct TripDetailView: View {
         syncError = nil
         
         Task {
-            let emails = await EmailFetchService.shared.fetchTravelEmails()
+            let allEmails = await EmailFetchService.shared.fetchTravelEmails()
+            // Filter out forwarded emails as requested by user
+            let emails = allEmails.filter { 
+                let lowerSubject = $0.subject.lowercased()
+                return !lowerSubject.hasPrefix("fwd:") && !lowerSubject.hasPrefix("fw:")
+            }
             
             await MainActor.run {
-                syncTotal = Double(emails.count)
+                syncTotal = Double(max(1, emails.count))
                 syncProgress = 0
             }
             
@@ -188,7 +207,8 @@ struct TripDetailView: View {
                         let paddedStart = Calendar.current.date(byAdding: .day, value: -1, to: trip.startDate) ?? trip.startDate
                         let paddedEnd = Calendar.current.date(byAdding: .day, value: 1, to: trip.endDate) ?? trip.endDate
                         
-                        if item.startTime <= paddedEnd && item.endTime >= paddedStart {
+                        let itemEndTime = item.endTime ?? item.startTime
+                        if item.startTime <= paddedEnd && itemEndTime >= paddedStart {
                             newItems.append(item)
                         }
                     }
