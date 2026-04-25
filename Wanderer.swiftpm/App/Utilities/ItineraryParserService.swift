@@ -308,7 +308,7 @@ class ItineraryParserService {
                                     "bookingReference": ["type": ["string", "null"]],
                                     "travelMode": [
                                         "type": "string",
-                                        "enum": ["Flight", "Hotel", "Bus", "Train", "Activity"]
+                                        "enum": ["Flight", "Hotel", "Bus", "Train", "Activity", "Document", "Other"]
                                     ],
                                     "notes": ["type": ["string", "null"]]
                                 ],

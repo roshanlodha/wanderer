@@ -7,6 +7,8 @@ enum TravelMode: String, Codable, CaseIterable {
     case bus = "Bus"
     case train = "Train"
     case activity = "Activity"
+    case document = "Document"
+    case other = "Other"
     
     var icon: String {
         switch self {
@@ -15,6 +17,8 @@ enum TravelMode: String, Codable, CaseIterable {
         case .bus: return "bus.fill"
         case .train: return "train.side.front.car"
         case .activity: return "ticket.fill"
+        case .document: return "doc.text.fill"
+        case .other: return "map.fill"
         }
     }
 }

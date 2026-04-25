@@ -28,14 +28,19 @@ class EmailFetchService {
     /// Uses phrase matching and category-specific terms to reduce false positives.
     /// Words like "confirmation" and "ticket" alone are far too broad.
     private let gmailSearchQuery = """
-    (subject:(flight OR itinerary OR "boarding pass" OR "e-ticket" OR "travel confirmation" OR "booking confirmation" OR "reservation confirmation" OR "hotel reservation" OR "car rental" OR "trip" OR airbnb OR "check-in" OR "check in") \
-    OR from:(booking.com OR airbnb.com OR hotels.com OR expedia.com OR kayak.com OR tripadvisor.com OR united.com OR delta.com OR aa.com OR southwest.com OR jetblue.com OR amtrak.com OR vrbo.com OR marriott.com OR hilton.com OR hyatt.com OR ihg.com OR hertz.com OR avis.com OR enterprise.com OR capitalone.com OR opentable.com OR resy.com OR virginatlantic.com OR ryanair.com OR easyjet.com OR flixbus.com OR trainline.com OR scotrail.co.uk))
+    (subject:(flight OR itinerary OR "boarding pass" OR "e-ticket" OR "travel confirmation" OR "booking confirmation" OR "reservation confirmation" OR "hotel reservation" OR "car rental" OR "trip" OR airbnb OR "check-in" OR "check in" OR "electronic travel" OR "ETA" OR visa OR passport OR cruise OR ferry OR train OR bus OR insurance OR tour OR tickets OR event OR "travel document") \
+    OR from:(booking.com OR airbnb.com OR hotels.com OR expedia.com OR kayak.com OR tripadvisor.com OR united.com OR delta.com OR aa.com OR southwest.com OR jetblue.com OR amtrak.com OR vrbo.com OR marriott.com OR hilton.com OR hyatt.com OR ihg.com OR hertz.com OR avis.com OR enterprise.com OR capitalone.com OR opentable.com OR resy.com OR virginatlantic.com OR ryanair.com OR easyjet.com OR flixbus.com OR trainline.com OR scotrail.co.uk OR ukvi OR "gov.uk" OR tfl.gov.uk OR capitalonebooking.com OR chasetravel.com OR amextravel.com OR travel.americanexpress.com OR hopper.com OR skyscanner.com OR agoda.com OR priceline.com OR travelocity.com OR orbitz.com OR cheapoair.com OR kiwi.com OR trip.com))
     """
     
     private let microsoftSearchTerms = [
         "flight confirmation", "booking confirmation", "reservation confirmation",
         "hotel reservation", "itinerary", "boarding pass", "e-ticket",
-        "travel confirmation", "airbnb", "check-in"
+        "travel confirmation", "airbnb", "check-in", "electronic travel",
+        "ETA", "visa", "passport", "cruise", "ferry", "train", "bus",
+        "insurance", "tour", "tickets", "event", "travel document",
+        "capitalonebooking.com", "chasetravel.com", "amextravel.com",
+        "hopper.com", "skyscanner.com", "agoda.com", "priceline.com",
+        "travelocity.com", "orbitz.com", "cheapoair.com", "kiwi.com", "trip.com"
     ]
     
     /// Known non-travel sender patterns to filter out at the fetch level
@@ -114,7 +119,7 @@ class EmailFetchService {
         var searchComponents = URLComponents(string: "https://gmail.googleapis.com/gmail/v1/users/me/messages")!
         searchComponents.queryItems = [
             URLQueryItem(name: "q", value: gmailSearchQuery),
-            URLQueryItem(name: "maxResults", value: "30")
+            URLQueryItem(name: "maxResults", value: "200")
         ]
         
         let searchRequest = makeAuthorizedRequest(url: searchComponents.url!, token: accessToken)
@@ -129,7 +134,7 @@ class EmailFetchService {
         
         // Fetch full message for each result
         var emails: [FetchedEmail] = []
-        for ref in messageRefs.prefix(30) {
+        for ref in messageRefs.prefix(200) {
             do {
                 let messageURL = URL(string: "https://gmail.googleapis.com/gmail/v1/users/me/messages/\(ref.id)?format=full")!
                 let msgRequest = makeAuthorizedRequest(url: messageURL, token: accessToken)
@@ -158,7 +163,7 @@ class EmailFetchService {
         var searchComponents = URLComponents(string: "https://graph.microsoft.com/v1.0/me/messages")!
         searchComponents.queryItems = [
             URLQueryItem(name: "$search", value: "\"\(keywordQuery)\""),
-            URLQueryItem(name: "$top", value: "30"),
+            URLQueryItem(name: "$top", value: "200"),
             URLQueryItem(name: "$select", value: "id,subject,from,receivedDateTime,body")
         ]
         
