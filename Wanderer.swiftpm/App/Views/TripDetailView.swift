@@ -9,8 +9,9 @@ struct TripDetailView: View {
     // Sync state
     @State private var isFetchingEmails = false
     @State private var isExtracting = false
-    @State private var fetchedEmails: [FetchedEmail] = []
-    @State private var importantEmails: [FetchedEmail] = []
+    @State private var itineraryEmails: [FetchedEmail] = []
+    @State private var importantDocuments: [FetchedEmail] = []
+    @State private var otherEmails: [FetchedEmail] = []
     @State private var emailStatuses: [String: FetchedEmail.ExtractionStatus] = [:]
     @State private var expandedEmailIds: Set<String> = []
     @State private var syncError: String?
@@ -19,7 +20,9 @@ struct TripDetailView: View {
     @State private var syncStatus: String = ""
     @State private var showAddItemSheet = false
     @State private var extractionTask: Task<Void, Never>?
+    @State private var classificationTask: Task<Void, Never>?
     @State private var showTripSettingsSheet = false
+    @State private var selectedTab: String = "itinerary"
     @AppStorage("classificationMode") private var classificationMode: String = "Smart"
     
     // Manual add form state
@@ -48,7 +51,7 @@ struct TripDetailView: View {
     }
 
     var hasAnyEmailSections: Bool {
-        !fetchedEmails.isEmpty || !importantEmails.isEmpty
+        !itineraryEmails.isEmpty || !importantDocuments.isEmpty || !otherEmails.isEmpty
     }
     
     var body: some View {
@@ -179,7 +182,20 @@ struct TripDetailView: View {
                 }
             }
 
-            if isExtracting {
+            if isFetchingEmails && classificationMode == "Smart" {
+                HStack {
+                    Spacer()
+                    Button(role: .destructive) {
+                        stopClassification()
+                    } label: {
+                        Label("Stop Classification", systemImage: "stop.fill")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            } else if isExtracting {
                 HStack {
                     Spacer()
                     Button(role: .destructive) {
@@ -238,79 +254,133 @@ struct TripDetailView: View {
         }
     }
     
-    // MARK: - Emails Section
+    // MARK: - Emails TabView
     
     private var emailsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Divider()
                 .padding(.vertical, 12)
-
-            if !fetchedEmails.isEmpty {
-                HStack {
-                    Text("Detected Emails")
-                        .font(.headline)
-                    Spacer()
-
-                    Text("\(fetchedEmails.count)")
-                        .font(.caption)
-                        .fontWeight(.semibold)
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 2)
-                        .background(Color.blue)
-                        .clipShape(Capsule())
-
-                    // Extract All button
-                    Button {
-                        extractAllEmails()
-                    } label: {
-                        Label("Extract All", systemImage: "sparkles")
+            
+            TabView(selection: $selectedTab) {
+                // Itinerary Email Tab
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Itinerary Emails")
+                            .font(.headline)
+                        Spacer()
+                        Text("\(itineraryEmails.count)")
                             .font(.caption)
                             .fontWeight(.semibold)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 2)
+                            .background(Color.blue)
+                            .clipShape(Capsule())
+                        
+                        Button {
+                            extractAllEmails()
+                        } label: {
+                            Label("Extract All", systemImage: "sparkles")
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.green)
+                        .controlSize(.small)
+                        .disabled(isExtracting || itineraryEmails.isEmpty)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.green)
-                    .controlSize(.small)
-                    .disabled(isExtracting || fetchedEmails.isEmpty)
-                }
-                .padding(.horizontal)
-
-                ForEach(fetchedEmails) { email in
-                    emailRow(email)
-                }
-            }
-
-            if !importantEmails.isEmpty {
-                sectionHeader(title: "Important Emails", count: importantEmails.count, color: .indigo)
-                Text("Useful trip-related messages identified by AI that are not auto-included in itinerary parsing.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
                     .padding(.horizontal)
-
-                ForEach(importantEmails) { email in
-                    secondaryEmailRow(email, label: "Important", labelColor: .indigo) {
-                        includeInItinerary(email: email)
+                    
+                    if itineraryEmails.isEmpty {
+                        Text("No itinerary emails yet.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .padding()
+                    } else {
+                        ForEach(itineraryEmails) { email in
+                            emailRow(email)
+                        }
                     }
                 }
+                .tag("itinerary")
+                
+                // Important Documents Tab
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Important Documents")
+                            .font(.headline)
+                        Spacer()
+                        Text("\(importantDocuments.count)")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 2)
+                            .background(Color.indigo)
+                            .clipShape(Capsule())
+                    }
+                    .padding(.horizontal)
+                    
+                    Text("Trip-related messages identified by AI that are not timeline events (ETAs, visas, insurance, etc.).")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal)
+                    
+                    if importantDocuments.isEmpty {
+                        Text("No important documents yet.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .padding()
+                    } else {
+                        ForEach(importantDocuments) { email in
+                            secondaryEmailRow(email, label: "Important", labelColor: .indigo) {
+                                moveToItinerary(email: email)
+                            }
+                        }
+                    }
+                }
+                .tag("important")
+                
+                // Other Tab
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Other")
+                            .font(.headline)
+                        Spacer()
+                        Text("\(otherEmails.count)")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 2)
+                            .background(Color.gray)
+                            .clipShape(Capsule())
+                    }
+                    .padding(.horizontal)
+                    
+                    Text("Emails rejected by AI as not travel-related or manually moved here.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal)
+                    
+                    if otherEmails.isEmpty {
+                        Text("No emails in Other tab.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .padding()
+                    } else {
+                        ForEach(otherEmails) { email in
+                            secondaryEmailRow(email, label: "Rejected", labelColor: .gray) {
+                                moveToItinerary(email: email)
+                            }
+                        }
+                    }
+                }
+                .tag("other")
             }
+            .tabViewStyle(.page(indexDisplayMode: .always))
+            .frame(minHeight: 300)
         }
-    }
-
-    private func sectionHeader(title: String, count: Int, color: Color) -> some View {
-        HStack {
-            Text(title)
-                .font(.headline)
-            Spacer()
-            Text("\(count)")
-                .font(.caption)
-                .fontWeight(.semibold)
-                .foregroundColor(.white)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 2)
-                .background(color)
-                .clipShape(Capsule())
-        }
-        .padding(.horizontal)
     }
 
     // MARK: - Email Row
@@ -669,20 +739,21 @@ struct TripDetailView: View {
     
     private func removeEmail(_ email: FetchedEmail) {
         withAnimation {
-            fetchedEmails.removeAll { $0.id == email.id }
-            importantEmails.removeAll { $0.id == email.id }
+            itineraryEmails.removeAll { $0.id == email.id }
+            importantDocuments.removeAll { $0.id == email.id }
             emailStatuses.removeValue(forKey: email.id)
             expandedEmailIds.remove(email.id)
         }
     }
 
-    private func includeInItinerary(email: FetchedEmail) {
+    private func moveToItinerary(email: FetchedEmail) {
         withAnimation {
-            importantEmails.removeAll { $0.id == email.id }
+            importantDocuments.removeAll { $0.id == email.id }
+            otherEmails.removeAll { $0.id == email.id }
 
-            if !fetchedEmails.contains(where: { $0.id == email.id }) {
-                fetchedEmails.append(email)
-                fetchedEmails.sort { $0.date > $1.date }
+            if !itineraryEmails.contains(where: { $0.id == email.id }) {
+                itineraryEmails.append(email)
+                itineraryEmails.sort { $0.date > $1.date }
             }
             emailStatuses[email.id] = .pending
         }
@@ -766,7 +837,7 @@ struct TripDetailView: View {
         isFetchingEmails = true
         syncError = nil
         
-        Task {
+        classificationTask = Task {
             await MainActor.run {
                 syncStatus = "Searching for travel emails..."
                 syncTotal = 0
@@ -782,13 +853,12 @@ struct TripDetailView: View {
                 let itinerary = keptAfterDate.sorted { $0.date > $1.date }
 
                 await MainActor.run {
-                    fetchedEmails = itinerary
-                    importantEmails = []
+                    itineraryEmails = itinerary
+                    importantDocuments = []
                     emailStatuses = [:]
                     for email in itinerary {
                         emailStatuses[email.id] = .pending
                     }
-                    isFetchingEmails = false
 
                     if emails.isEmpty {
                         syncError = "No travel-related emails found. Try connecting an email account in Settings or check that you have travel confirmation emails."
@@ -801,6 +871,8 @@ struct TripDetailView: View {
                         syncStatus = statusParts.joined(separator: " · ")
                         print("[TripDetailView] Ignore emails before: \(effectiveIgnoreEmailsBefore)")
                     }
+                    isFetchingEmails = false
+                    classificationTask = nil
                 }
                 return
             }
@@ -814,8 +886,14 @@ struct TripDetailView: View {
             var itinerary: [FetchedEmail] = []
             var important: [FetchedEmail] = []
             var irrelevantCount = 0
+            var wasClassificationCancelled = false
 
             for (index, email) in keptAfterDate.enumerated() {
+                if Task.isCancelled {
+                    wasClassificationCancelled = true
+                    break
+                }
+
                 do {
                     let triage = try await ItineraryParserService.shared.classifyEmailForSearch(
                         emailText: "Subject: \(email.subject)\nFrom: \(email.sender)\n\n\(email.bodyText)",
@@ -844,14 +922,15 @@ struct TripDetailView: View {
             }
             
             await MainActor.run {
-                fetchedEmails = itinerary.sorted { $0.date > $1.date }
-                importantEmails = important.sorted { $0.date > $1.date }
+                itineraryEmails = itinerary.sorted { $0.date > $1.date }
+                importantDocuments = important.sorted { $0.date > $1.date }
                 // Initialize all statuses to pending
                 emailStatuses = [:]
                 for email in itinerary {
                     emailStatuses[email.id] = .pending
                 }
                 isFetchingEmails = false
+                classificationTask = nil
                 
                 if emails.isEmpty {
                     syncError = "No travel-related emails found. Try connecting an email account in Settings or check that you have travel confirmation emails."
@@ -862,6 +941,7 @@ struct TripDetailView: View {
                     if ignoredBeforeCount > 0 { statusParts.append("Ignored before date: \(ignoredBeforeCount)") }
                     if irrelevantCount > 0 { statusParts.append("Not trip-related: \(irrelevantCount)") }
                     if secondPass.removedCount > 0 { statusParts.append("FW removed: \(secondPass.removedCount)") }
+                    if wasClassificationCancelled { statusParts.append("Classification stopped") }
                     syncStatus = statusParts.joined(separator: " · ")
                     print("[TripDetailView] Ignore emails before: \(effectiveIgnoreEmailsBefore)")
                 }
@@ -872,7 +952,7 @@ struct TripDetailView: View {
     // MARK: - Phase 2: Extract Itinerary from All Emails
     
     private func extractAllEmails() {
-        let pendingEmails = fetchedEmails.filter { email in
+        let pendingEmails = itineraryEmails.filter { email in
             let status = emailStatuses[email.id] ?? .pending
             switch status {
             case .pending, .failed:
@@ -884,7 +964,7 @@ struct TripDetailView: View {
         
         guard !pendingEmails.isEmpty else {
             // Re-extract all if everything is already processed
-            extractEmails(fetchedEmails)
+            extractEmails(itineraryEmails)
             return
         }
         
@@ -977,7 +1057,8 @@ struct TripDetailView: View {
             // Auto-remove irrelevant emails from the list
             await MainActor.run {
                 let irrelevantIds = emailStatuses.filter { $0.value == .irrelevant }.map { $0.key }
-                fetchedEmails.removeAll { irrelevantIds.contains($0.id) }
+                otherEmails.append(contentsOf: itineraryEmails.filter { irrelevantIds.contains($0.id) })
+                itineraryEmails.removeAll { irrelevantIds.contains($0.id) }
                 for id in irrelevantIds {
                     emailStatuses.removeValue(forKey: id)
                 }
@@ -1002,6 +1083,11 @@ struct TripDetailView: View {
                 }
             }
         }
+    }
+
+    private func stopClassification() {
+        classificationTask?.cancel()
+        syncStatus = "Stopping classification..."
     }
 
     private func stopParsing() {
@@ -1047,7 +1133,8 @@ struct TripDetailView: View {
                         emailStatuses[email.id] = .irrelevant
                         // Auto-remove irrelevant email
                         withAnimation {
-                            fetchedEmails.removeAll { $0.id == email.id }
+                            itineraryEmails.removeAll { $0.id == email.id }
+                            otherEmails.append(email)
                             emailStatuses.removeValue(forKey: email.id)
                         }
                     }
