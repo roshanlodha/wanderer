@@ -22,7 +22,7 @@ struct TripDetailView: View {
     @State private var extractionTask: Task<Void, Never>?
     @State private var classificationTask: Task<Void, Never>?
     @State private var showTripSettingsSheet = false
-    @State private var selectedTab: String = "itinerary"
+    @State private var selectedTab: EmailTab = .itinerary
     @AppStorage("classificationMode") private var classificationMode: String = "Smart"
     
     // Manual add form state
@@ -52,6 +52,28 @@ struct TripDetailView: View {
 
     var hasAnyEmailSections: Bool {
         !itineraryEmails.isEmpty || !importantDocuments.isEmpty || !otherEmails.isEmpty
+    }
+
+    private enum EmailTab: String, CaseIterable {
+        case itinerary
+        case important
+        case other
+
+        var title: String {
+            switch self {
+            case .itinerary: return "Itinerary"
+            case .important: return "Important"
+            case .other: return "Other"
+            }
+        }
+
+        var tint: Color {
+            switch self {
+            case .itinerary: return .blue
+            case .important: return .indigo
+            case .other: return .gray
+            }
+        }
     }
     
     var body: some View {
@@ -261,8 +283,14 @@ struct TripDetailView: View {
             Divider()
                 .padding(.vertical, 12)
             
-            TabView(selection: $selectedTab) {
-                // Itinerary Email Tab
+            HStack(spacing: 8) {
+                tabButton(.itinerary, count: itineraryEmails.count)
+                tabButton(.important, count: importantDocuments.count)
+                tabButton(.other, count: otherEmails.count)
+            }
+            .padding(.horizontal)
+            
+            if selectedTab == .itinerary {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Text("Itinerary Emails")
@@ -302,9 +330,10 @@ struct TripDetailView: View {
                         }
                     }
                 }
-                .tag("itinerary")
-                
-                // Important Documents Tab
+                .padding(.top, 8)
+            }
+            
+            if selectedTab == .important {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Text("Important Documents")
@@ -339,9 +368,10 @@ struct TripDetailView: View {
                         }
                     }
                 }
-                .tag("important")
-                
-                // Other Tab
+                .padding(.top, 8)
+            }
+            
+            if selectedTab == .other {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Text("Other")
@@ -376,11 +406,39 @@ struct TripDetailView: View {
                         }
                     }
                 }
-                .tag("other")
+                .padding(.top, 8)
             }
-            .tabViewStyle(.page(indexDisplayMode: .always))
-            .frame(minHeight: 300)
         }
+    }
+
+    private func tabButton(_ tab: EmailTab, count: Int) -> some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                selectedTab = tab
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Text(tab.title)
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                    .lineLimit(1)
+
+                Text("\(count)")
+                    .font(.caption)
+                    .fontWeight(.semibold)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(selectedTab == tab ? Color.white.opacity(0.22) : Color(.secondarySystemBackground))
+                    .clipShape(Capsule())
+            }
+            .foregroundColor(selectedTab == tab ? .white : .primary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .padding(.horizontal, 12)
+            .background(selectedTab == tab ? tab.tint : Color(.secondarySystemGroupedBackground))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Email Row
