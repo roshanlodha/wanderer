@@ -213,12 +213,28 @@ class EmailFetchService {
     }
     
     func stripHTML(from string: String) -> String {
-        let regex = try? NSRegularExpression(pattern: "<[^>]+>", options: .caseInsensitive)
-        let range = NSRange(location: 0, length: string.utf16.count)
-        let stripped = regex?.stringByReplacingMatches(in: string, options: [], range: range, withTemplate: " ") ?? string
-        
-        // Collapse whitespace
-        let components = stripped.components(separatedBy: .whitespacesAndNewlines)
+        // Remove script/style blocks first so CSS/JS content does not leak into plain text.
+        var cleaned = string.replacingOccurrences(of: "(?is)<style[^>]*>.*?</style>", with: " ", options: .regularExpression)
+        cleaned = cleaned.replacingOccurrences(of: "(?is)<script[^>]*>.*?</script>", with: " ", options: .regularExpression)
+
+        // Remove remaining HTML tags.
+        cleaned = cleaned.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
+
+        // Decode common HTML entities from message bodies.
+        cleaned = cleaned
+            .replacingOccurrences(of: "&nbsp;", with: " ")
+            .replacingOccurrences(of: "&#160;", with: " ")
+            .replacingOccurrences(of: "&amp;", with: "&")
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&#39;", with: "'")
+
+        // Remove CSS-like leftovers that can still appear in some providers.
+        cleaned = cleaned.replacingOccurrences(of: "(?i)\\.[a-z0-9_-]+\\s*\\{[^\\}]{0,1000}\\}", with: " ", options: .regularExpression)
+        cleaned = cleaned.replacingOccurrences(of: "(?i)@[a-z-]+\\s*[^\\{]*\\{[^\\}]{0,1000}\\}", with: " ", options: .regularExpression)
+        cleaned = cleaned.replacingOccurrences(of: "(?i)\\b[a-z-]+\\s*:\\s*[^;\\n]{1,120};", with: " ", options: .regularExpression)
+
+        // Collapse whitespace.
+        let components = cleaned.components(separatedBy: .whitespacesAndNewlines)
         return components.filter { !$0.isEmpty }.joined(separator: " ")
     }
     
