@@ -1,5 +1,6 @@
 import Foundation
 import SwiftData
+import CoreLocation
 
 #if canImport(FoundationModels)
 import FoundationModels
@@ -11,8 +12,8 @@ import MLX
 
 struct ExtractedItineraryItem: Codable {
     let title: String?
-    let startTime: Date?
-    let endTime: Date?
+    let startTimeString: String?
+    let endTimeString: String?
     let timeZoneGMTOffset: String?
     let locationName: String?
     let provider: String?
@@ -20,6 +21,74 @@ struct ExtractedItineraryItem: Codable {
     let alternativeReference: String?
     let travelMode: String?
     let notes: String?
+
+    enum CodingKeys: String, CodingKey {
+        case title
+        case startTime
+        case endTime
+        case timeZoneGMTOffset
+        case locationName
+        case provider
+        case bookingReference
+        case alternativeReference
+        case travelMode
+        case notes
+    }
+
+    init(
+        title: String?,
+        startTime: Date?,
+        endTime: Date?,
+        timeZoneGMTOffset: String?,
+        locationName: String?,
+        provider: String?,
+        bookingReference: String?,
+        alternativeReference: String?,
+        travelMode: String?,
+        notes: String?
+    ) {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+
+        self.title = title
+        self.startTimeString = startTime.map { formatter.string(from: $0) }
+        self.endTimeString = endTime.map { formatter.string(from: $0) }
+        self.timeZoneGMTOffset = timeZoneGMTOffset
+        self.locationName = locationName
+        self.provider = provider
+        self.bookingReference = bookingReference
+        self.alternativeReference = alternativeReference
+        self.travelMode = travelMode
+        self.notes = notes
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        title = try container.decodeIfPresent(String.self, forKey: .title)
+        startTimeString = try container.decodeIfPresent(String.self, forKey: .startTime)
+        endTimeString = try container.decodeIfPresent(String.self, forKey: .endTime)
+        timeZoneGMTOffset = try container.decodeIfPresent(String.self, forKey: .timeZoneGMTOffset)
+        locationName = try container.decodeIfPresent(String.self, forKey: .locationName)
+        provider = try container.decodeIfPresent(String.self, forKey: .provider)
+        bookingReference = try container.decodeIfPresent(String.self, forKey: .bookingReference)
+        alternativeReference = try container.decodeIfPresent(String.self, forKey: .alternativeReference)
+        travelMode = try container.decodeIfPresent(String.self, forKey: .travelMode)
+        notes = try container.decodeIfPresent(String.self, forKey: .notes)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(title, forKey: .title)
+        try container.encodeIfPresent(startTimeString, forKey: .startTime)
+        try container.encodeIfPresent(endTimeString, forKey: .endTime)
+        try container.encodeIfPresent(timeZoneGMTOffset, forKey: .timeZoneGMTOffset)
+        try container.encodeIfPresent(locationName, forKey: .locationName)
+        try container.encodeIfPresent(provider, forKey: .provider)
+        try container.encodeIfPresent(bookingReference, forKey: .bookingReference)
+        try container.encodeIfPresent(alternativeReference, forKey: .alternativeReference)
+        try container.encodeIfPresent(travelMode, forKey: .travelMode)
+        try container.encodeIfPresent(notes, forKey: .notes)
+    }
 }
 
 /// Wraps the LLM response: includes a relevance flag so the model can reject non-travel emails
@@ -43,6 +112,8 @@ class ItineraryParserService {
     /// Reuse a single session across calls to preserve context efficiently
     private var appleIntelligenceSession: AnyObject?
     #endif
+    private let geocoder = CLGeocoder()
+    private var cachedGMTOffsets: [String: String] = [:]
     
     enum ParserError: Error, LocalizedError {
         case invalidAPIKey
@@ -176,51 +247,9 @@ class ItineraryParserService {
         return cleaned
     }
     
-    // MARK: - Custom Date Decoder
-    
-    /// Shared date decoding strategy used across all engines
-    private var customDateDecoder: JSONDecoder {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .custom { decoder in
-            let container = try decoder.singleValueContainer()
-            let dateString = try container.decode(String.self)
-            
-            let formatter = ISO8601DateFormatter()
-            // Standard ISO8601 with timezone
-            if let date = formatter.date(from: dateString) {
-                return date
-            }
-            // With fractional seconds
-            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            if let date = formatter.date(from: dateString) {
-                return date
-            }
-            // Without timezone (local time)
-            formatter.formatOptions = [.withYear, .withMonth, .withDay, .withTime, .withDashSeparatorInDate, .withColonSeparatorInTime]
-            if let date = formatter.date(from: dateString) {
-                return date
-            }
-            // DateFormatter fallback
-            let fallback = DateFormatter()
-            fallback.locale = Locale(identifier: "en_US_POSIX")
-            fallback.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
-            if let date = fallback.date(from: dateString) {
-                return date
-            }
-            // Date-only fallback (some items may only have a date)
-            fallback.dateFormat = "yyyy-MM-dd"
-            if let date = fallback.date(from: dateString) {
-                return date
-            }
-            
-            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Cannot decode date string: \(dateString)")
-        }
-        return decoder
-    }
-    
     // MARK: - Duplicate Detection
 
-    private func normalizedGMTOffset(_ rawValue: String?) -> String? {
+    func standardizedGMTOffset(_ rawValue: String?) -> String? {
         guard var value = rawValue?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
             return nil
         }
@@ -269,6 +298,106 @@ class ItineraryParserService {
         }
 
         return "\(sign)\(hours)"
+    }
+
+    func gmtOffsetString(for timeZone: TimeZone, at date: Date) -> String {
+        let totalSeconds = timeZone.secondsFromGMT(for: date)
+        let sign = totalSeconds >= 0 ? "+" : "-"
+        let absoluteSeconds = abs(totalSeconds)
+        let hours = absoluteSeconds / 3600
+        let minutes = (absoluteSeconds % 3600) / 60
+
+        if minutes == 0 {
+            return "\(sign)\(hours)"
+        }
+
+        return String(format: "%@%d:%02d", sign, hours, minutes)
+    }
+
+    func timeZone(fromGMTOffset offset: String?) -> TimeZone? {
+        guard let normalized = standardizedGMTOffset(offset) else { return nil }
+        let sign = normalized.hasPrefix("-") ? -1 : 1
+        let unsigned = normalized.dropFirst()
+        let parts = unsigned.split(separator: ":", omittingEmptySubsequences: false)
+
+        guard let hours = Int(parts.first ?? ""), (0...14).contains(hours) else {
+            return nil
+        }
+
+        let minutes = parts.count > 1 ? (Int(parts[1]) ?? 0) : 0
+        guard minutes >= 0 && minutes < 60 else { return nil }
+
+        let seconds = sign * ((hours * 3600) + (minutes * 60))
+        return TimeZone(secondsFromGMT: seconds)
+    }
+
+    func parseExtractedDateString(_ rawValue: String?, gmtOffset: String?) -> Date? {
+        guard let trimmed = rawValue?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
+            return nil
+        }
+
+        let isoFormatter = ISO8601DateFormatter()
+        if let direct = isoFormatter.date(from: trimmed) {
+            return direct
+        }
+
+        isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let direct = isoFormatter.date(from: trimmed) {
+            return direct
+        }
+
+        let timeZone = timeZone(fromGMTOffset: gmtOffset) ?? .current
+        let formats = [
+            "yyyy-MM-dd'T'HH:mm:ss",
+            "yyyy-MM-dd'T'HH:mm",
+            "yyyy-MM-dd HH:mm:ss",
+            "yyyy-MM-dd HH:mm",
+            "yyyy-MM-dd"
+        ]
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = timeZone
+
+        for format in formats {
+            formatter.dateFormat = format
+            if let date = formatter.date(from: trimmed) {
+                return date
+            }
+        }
+
+        return nil
+    }
+
+    func recalibratedDate(_ sourceDate: Date, from assumedTimeZone: TimeZone, to eventGMTOffset: String) -> Date? {
+        guard let targetTimeZone = timeZone(fromGMTOffset: eventGMTOffset) else { return nil }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = assumedTimeZone
+        let components = calendar.dateComponents([.year, .month, .day, .hour, .minute, .second], from: sourceDate)
+
+        var targetCalendar = Calendar(identifier: .gregorian)
+        targetCalendar.timeZone = targetTimeZone
+        return targetCalendar.date(from: components)
+    }
+
+    func inferGMTOffset(from locationName: String, at date: Date) async -> String? {
+        let trimmed = locationName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let cacheKey = "\(trimmed.lowercased())|\(Int(date.timeIntervalSinceReferenceDate / 86_400))"
+        if let cached = cachedGMTOffsets[cacheKey] {
+            return cached
+        }
+
+        do {
+            let placemarks = try await geocoder.geocodeAddressString(trimmed)
+            guard let timeZone = placemarks.first?.timeZone else { return nil }
+            let offset = gmtOffsetString(for: timeZone, at: date)
+            cachedGMTOffsets[cacheKey] = offset
+            return offset
+        } catch {
+            return nil
+        }
     }
     
     /// Checks if a new item is a duplicate of any existing items in the trip.
@@ -368,17 +497,28 @@ class ItineraryParserService {
         }
         
         // Map to SwiftData objects (without context or trip initially)
-        let items = result.items.compactMap { item -> ItineraryItem? in
-            guard let start = item.startTime else { return nil }
+        var items: [ItineraryItem] = []
+        for item in result.items {
+            let tentativeStart = parseExtractedDateString(item.startTimeString, gmtOffset: nil) ?? Date()
+            let normalizedOffset: String?
+            if let explicitOffset = standardizedGMTOffset(item.timeZoneGMTOffset) {
+                normalizedOffset = explicitOffset
+            } else {
+                normalizedOffset = await inferGMTOffset(from: item.locationName ?? "", at: tentativeStart)
+            }
+            guard let start = parseExtractedDateString(item.startTimeString, gmtOffset: normalizedOffset) else {
+                continue
+            }
+            let end = parseExtractedDateString(item.endTimeString, gmtOffset: normalizedOffset)
             
             let tModeStr = item.travelMode?.lowercased() ?? "other"
             let tMode = TravelMode.allCases.first(where: { $0.rawValue.lowercased() == tModeStr }) ?? .other
             
-            return ItineraryItem(
+            items.append(ItineraryItem(
                 title: item.title ?? "Unknown Travel Event",
                 startTime: start,
-                endTime: item.endTime,
-                timeZoneGMTOffset: normalizedGMTOffset(item.timeZoneGMTOffset),
+                endTime: end,
+                timeZoneGMTOffset: normalizedOffset,
                 locationName: item.locationName ?? "Unknown Location",
                 bookingReference: item.bookingReference,
                 alternativeReference: item.alternativeReference,
@@ -386,7 +526,7 @@ class ItineraryParserService {
                 notes: item.notes,
                 rawTextSource: emailText,
                 travelMode: tMode
-            )
+            ))
         }
         
         return (relevant: true, items: items)
@@ -602,6 +742,7 @@ class ItineraryParserService {
                                     "title": ["type": "string"],
                                     "startTime": ["type": "string", "description": "ISO8601 string"],
                                     "endTime": ["type": ["string", "null"], "description": "ISO8601 string"],
+                                    "timeZoneGMTOffset": ["type": ["string", "null"], "description": "GMT offset string like +1 or +5:30"],
                                     "locationName": ["type": "string"],
                                     "provider": ["type": ["string", "null"]],
                                     "bookingReference": ["type": ["string", "null"]],
@@ -612,7 +753,7 @@ class ItineraryParserService {
                                     ],
                                     "notes": ["type": ["string", "null"]]
                                 ],
-                                "required": ["title", "startTime", "endTime", "locationName", "provider", "bookingReference", "alternativeReference", "travelMode", "notes"],
+                                "required": ["title", "startTime", "endTime", "timeZoneGMTOffset", "locationName", "provider", "bookingReference", "alternativeReference", "travelMode", "notes"],
                                 "additionalProperties": false
                             ]
                         ]
@@ -684,13 +825,13 @@ class ItineraryParserService {
         
         if let contentData = contentString.data(using: .utf8) {
             do {
-                let result = try customDateDecoder.decode(ExtractionResult.self, from: contentData)
+                let result = try JSONDecoder().decode(ExtractionResult.self, from: contentData)
                 return result
             } catch {
                 print("[OpenAI] JSON decode error: \(error)")
                 // Try to extract just the items array as fallback
                 struct LegacyResult: Codable { let items: [ExtractedItineraryItem] }
-                if let legacyResult = try? customDateDecoder.decode(LegacyResult.self, from: contentData) {
+                if let legacyResult = try? JSONDecoder().decode(LegacyResult.self, from: contentData) {
                     return ExtractionResult(relevant: !legacyResult.items.isEmpty, items: legacyResult.items)
                 }
                 throw ParserError.parsingError("Failed to decode LLM response: \(error.localizedDescription)")
@@ -750,7 +891,7 @@ class ItineraryParserService {
                     throw ParserError.parsingError("Failed to decode extracted string to Data.")
                 }
                 
-                let decoder = customDateDecoder
+                let decoder = JSONDecoder()
                 
                 // Try to decode as ExtractionResult (with relevant field)
                 do {

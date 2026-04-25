@@ -38,8 +38,11 @@ struct TripDetailView: View {
     @State private var manualLocation = ""
     @State private var manualProvider = ""
     @State private var manualBookingRef = ""
+    @State private var manualTimeZoneGMTOffset = ""
     @State private var manualNotes = ""
     @State private var manualTravelMode: TravelMode = .activity
+    @State private var isInferringManualTimeZone = false
+    @State private var hasReconciledTimeZones = false
     
     var groupedItems: [(Date, [ItineraryItem])] {
         let sorted = trip.items.sorted { $0.startTime < $1.startTime }
@@ -213,7 +216,14 @@ struct TripDetailView: View {
         ) { result in
             importTrip(from: result)
         }
-        .onAppear(perform: loadPersistedEmails)
+        .onAppear {
+            loadPersistedEmails()
+            guard !hasReconciledTimeZones else { return }
+            hasReconciledTimeZones = true
+            Task {
+                await reconcileTripTimeZones()
+            }
+        }
     }
 
     @ViewBuilder
@@ -222,11 +232,7 @@ struct TripDetailView: View {
         case .overview:
             overviewContent
         case .calendar:
-            placeholderTab(
-                title: "Calendar",
-                systemImage: "calendar",
-                description: "Calendar view will live here."
-            )
+            WeeklyCalendarView(trip: trip)
         case .map:
             placeholderTab(
                 title: "Map",
@@ -894,6 +900,27 @@ struct TripDetailView: View {
                     TextField("Provider (optional)", text: $manualProvider)
                     TextField("Booking Reference (optional)", text: $manualBookingRef)
                 }
+
+                Section("Time Zone") {
+                    TextField("GMT Offset", text: $manualTimeZoneGMTOffset)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+
+                    Button {
+                        inferManualTimeZone()
+                    } label: {
+                        if isInferringManualTimeZone {
+                            ProgressView()
+                        } else {
+                            Label("Infer from Location", systemImage: "globe")
+                        }
+                    }
+                    .disabled(isInferringManualTimeZone || manualLocation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                    Text("Stored as a standardized GMT offset like `+1`, `-5`, or `+5:30`.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
                 
                 Section("Notes") {
                     TextField("Notes (optional)", text: $manualNotes, axis: .vertical)
@@ -1047,6 +1074,9 @@ struct TripDetailView: View {
             applyImportedTrip(payload)
             loadPersistedEmails()
             syncStatus = "Imported \(payload.items.count) items and \(payload.emailSources.count) emails from JSON."
+            Task {
+                await reconcileTripTimeZones()
+            }
         } catch {
             syncError = "Trip import failed: \(error.localizedDescription)"
         }
@@ -1109,11 +1139,13 @@ struct TripDetailView: View {
     
     private func saveManualItem() {
         let endTime = manualHasEndTime ? manualEndTime : nil
+        let timeZoneOffset = ItineraryParserService.shared.standardizedGMTOffset(manualTimeZoneGMTOffset)
 
         if let editingItem {
             editingItem.title = manualTitle
             editingItem.startTime = manualStartTime
             editingItem.endTime = endTime
+            editingItem.timeZoneGMTOffset = timeZoneOffset
             editingItem.locationName = manualLocation
             editingItem.bookingReference = manualBookingRef.isEmpty ? nil : manualBookingRef
             editingItem.provider = manualProvider.isEmpty ? nil : manualProvider
@@ -1124,6 +1156,7 @@ struct TripDetailView: View {
                 title: manualTitle,
                 startTime: manualStartTime,
                 endTime: endTime,
+                timeZoneGMTOffset: timeZoneOffset,
                 locationName: manualLocation,
                 bookingReference: manualBookingRef.isEmpty ? nil : manualBookingRef,
                 provider: manualProvider.isEmpty ? nil : manualProvider,
@@ -1147,6 +1180,7 @@ struct TripDetailView: View {
         manualLocation = ""
         manualProvider = ""
         manualBookingRef = ""
+        manualTimeZoneGMTOffset = ""
         manualNotes = ""
         manualTravelMode = .activity
     }
@@ -1160,9 +1194,56 @@ struct TripDetailView: View {
         manualLocation = item.locationName
         manualProvider = item.provider ?? ""
         manualBookingRef = item.bookingReference ?? ""
+        manualTimeZoneGMTOffset = item.timeZoneGMTOffset ?? ""
         manualNotes = item.notes ?? ""
         manualTravelMode = item.travelMode
         showAddItemSheet = true
+    }
+
+    private func inferManualTimeZone() {
+        let location = manualLocation.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !location.isEmpty else { return }
+
+        isInferringManualTimeZone = true
+        Task {
+            let inferred = await ItineraryParserService.shared.inferGMTOffset(from: location, at: manualStartTime)
+            await MainActor.run {
+                if let inferred {
+                    manualTimeZoneGMTOffset = inferred
+                }
+                isInferringManualTimeZone = false
+            }
+        }
+    }
+
+    private func reconcileTripTimeZones() async {
+        for item in trip.items {
+            if Task.isCancelled { return }
+
+            let existingOffset = ItineraryParserService.shared.standardizedGMTOffset(item.timeZoneGMTOffset)
+            let inferredOffset: String?
+            if let existingOffset {
+                inferredOffset = existingOffset
+            } else {
+                inferredOffset = await ItineraryParserService.shared.inferGMTOffset(from: item.locationName, at: item.startTime)
+            }
+            guard let finalOffset = inferredOffset else { continue }
+
+            await MainActor.run {
+                if item.timeZoneGMTOffset == nil, item.rawTextSource != nil {
+                    if let recalibratedStart = ItineraryParserService.shared.recalibratedDate(item.startTime, from: .current, to: finalOffset) {
+                        item.startTime = recalibratedStart
+                    }
+
+                    if let endTime = item.endTime,
+                       let recalibratedEnd = ItineraryParserService.shared.recalibratedDate(endTime, from: .current, to: finalOffset) {
+                        item.endTime = recalibratedEnd
+                    }
+                }
+
+                item.timeZoneGMTOffset = finalOffset
+            }
+        }
     }
 
     private func loadPersistedEmails() {
