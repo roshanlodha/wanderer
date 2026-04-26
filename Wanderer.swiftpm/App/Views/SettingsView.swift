@@ -20,7 +20,20 @@ struct SettingsView: View {
     @AppStorage("classificationCloudModelSelection") private var classificationCloudModelSelection: String = "Nano"
     @AppStorage("localMLXServerURL") private var localMLXServerURL: String = "http://127.0.0.1:5413"
     @AppStorage("localMLXModel") private var localMLXModel: String = "mlx-community/Qwen3.5-4B-Instruct-4bit"
+    @AppStorage("localMLXOnDeviceEnabled") private var localMLXOnDeviceEnabled: Bool = true
     @State private var openAIApiKey: String = ""
+    @State private var isDownloadingLocalModel = false
+    @State private var localModelDownloadProgress: Double = 0
+    @State private var localModelDownloadStatus: String = ""
+    @State private var localModelDownloaded = false
+    @State private var localModelEstimatedSize: String?
+    @State private var showLocalModelDownloadConfirm = false
+    @State private var localModelDownloadError: String?
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
+    private var isCompactUI: Bool {
+        horizontalSizeClass == .compact
+    }
     
     var body: some View {
         NavigationStack {
@@ -84,11 +97,15 @@ struct SettingsView: View {
                                     KeychainManager.shared.save(newValue, forKey: .openAIApiKey)
                                 }
                         } else if classificationEngine == "Local (MLX)" {
-                            TextField("SwiftLM Server URL", text: $localMLXServerURL)
+                            TextField("SwiftLM Model", text: $localMLXModel)
                                 .textInputAutocapitalization(.never)
                                 .autocorrectionDisabled()
 
-                            TextField("SwiftLM Model", text: $localMLXModel)
+                            Toggle("Prefer On-Device Model", isOn: $localMLXOnDeviceEnabled)
+
+                            onDeviceLocalModelControls
+
+                            TextField("SwiftLM Server URL (Optional)", text: $localMLXServerURL)
                                 .textInputAutocapitalization(.never)
                                 .autocorrectionDisabled()
                         }
@@ -101,7 +118,7 @@ struct SettingsView: View {
                     } else if classificationEngine == "Apple Intelligence" {
                         Text("Smart mode uses on-device Apple Intelligence by default for lightweight local classification.")
                     } else if classificationEngine == "Local (MLX)" {
-                        Text("Smart mode uses the native SwiftLM server (OpenAI-compatible). Default model is Qwen3.5-4B.")
+                        Text("Smart mode supports on-device model downloads and optional SwiftLM server fallback. Default model is Qwen3.5-4B.")
                     } else {
                         Text("Smart mode uses AI to split emails into Detected vs Important and filter out non-trip emails.")
                     }
@@ -128,11 +145,15 @@ struct SettingsView: View {
                                 KeychainManager.shared.save(newValue, forKey: .openAIApiKey)
                             }
                     } else if extractionEngine == "Local (MLX)" {
-                        TextField("SwiftLM Server URL", text: $localMLXServerURL)
+                        TextField("SwiftLM Model", text: $localMLXModel)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
 
-                        TextField("SwiftLM Model", text: $localMLXModel)
+                        Toggle("Prefer On-Device Model", isOn: $localMLXOnDeviceEnabled)
+
+                        onDeviceLocalModelControls
+
+                        TextField("SwiftLM Server URL (Optional)", text: $localMLXServerURL)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                     }
@@ -143,7 +164,7 @@ struct SettingsView: View {
                         Text("Warning: Apple Intelligence has a limited context window. Large emails will be truncated and may lead to parsing errors.")
                             .foregroundColor(.orange)
                     } else if extractionEngine == "Local (MLX)" {
-                        Text("Uses native SwiftLM via local OpenAI-compatible endpoint. Recommended model: mlx-community/Qwen3.5-4B-Instruct-4bit.")
+                        Text("Local MLX supports on-device model download with user confirmation. SwiftLM endpoint is optional fallback if you run a local server.")
                     } else {
                         Text("Select where your emails are processed to extract itinerary details.")
                     }
@@ -153,6 +174,13 @@ struct SettingsView: View {
                 if let errorMessage = errorMessage {
                     Section {
                         Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundColor(.red)
+                    }
+                }
+
+                if let localModelDownloadError {
+                    Section {
+                        Label(localModelDownloadError, systemImage: "exclamationmark.triangle.fill")
                             .foregroundColor(.red)
                     }
                 }
@@ -169,6 +197,7 @@ struct SettingsView: View {
             }
             .onAppear {
                 refreshConnectionState()
+                refreshLocalModelState()
                 if UserDefaults.standard.string(forKey: "extractionCloudModelSelection") == nil,
                    let legacy = UserDefaults.standard.string(forKey: "cloudModelSelection") {
                     extractionCloudModelSelection = legacy
@@ -176,6 +205,69 @@ struct SettingsView: View {
                 if let key = KeychainManager.shared.get(forKey: .openAIApiKey) {
                     openAIApiKey = key
                 }
+            }
+            .onChange(of: extractionEngine) { _, newValue in
+                if newValue == "Local (MLX)" && !localModelDownloaded && !isDownloadingLocalModel {
+                    showLocalModelDownloadConfirm = true
+                }
+            }
+            .onChange(of: classificationEngine) { _, newValue in
+                if newValue == "Local (MLX)" && !localModelDownloaded && !isDownloadingLocalModel {
+                    showLocalModelDownloadConfirm = true
+                }
+            }
+            .onChange(of: localMLXModel) { _, _ in
+                refreshLocalModelState()
+            }
+            .alert("Download Local Model?", isPresented: $showLocalModelDownloadConfirm) {
+                Button("Not Now", role: .cancel) {}
+                Button("Download") {
+                    startLocalModelDownload()
+                }
+            } message: {
+                let estimate = localModelEstimatedSize ?? "several GB"
+                Text("TripBuddy can download \(localMLXModel) from Hugging Face for on-device MLX parsing. This may use \(estimate) and mobile data.")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var onDeviceLocalModelControls: some View {
+        if localModelDownloaded {
+            Label("On-device model ready", systemImage: "checkmark.circle.fill")
+                .foregroundColor(.green)
+                .font(.subheadline)
+        } else {
+            Button {
+                showLocalModelDownloadConfirm = true
+            } label: {
+                if isDownloadingLocalModel {
+                    HStack(spacing: 8) {
+                        ProgressView(value: localModelDownloadProgress, total: 1)
+                            .frame(maxWidth: 120)
+                        if isCompactUI {
+                            Image(systemName: "arrow.down.circle")
+                        } else {
+                            Text("Downloading")
+                                .font(.caption)
+                        }
+                    }
+                } else {
+                    if isCompactUI {
+                        Label("Download", systemImage: "arrow.down.circle")
+                    } else {
+                        Label("Download On-Device Model", systemImage: "arrow.down.circle")
+                    }
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(isDownloadingLocalModel)
+
+            if !localModelDownloadStatus.isEmpty {
+                Text(localModelDownloadStatus)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .lineLimit(2)
             }
         }
     }
@@ -205,17 +297,29 @@ struct SettingsView: View {
                     }
 
                     HStack(spacing: 8) {
-                        Button("Reconnect") {
+                        Button {
                             oauthService.disconnect(provider: provider)
                             refreshConnectionState()
                             connectProvider(provider)
+                        } label: {
+                            if isCompactUI {
+                                Image(systemName: "arrow.clockwise.circle")
+                            } else {
+                                Text("Reconnect")
+                            }
                         }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.small)
 
-                        Button("Disconnect", role: .destructive) {
+                        Button(role: .destructive) {
                             oauthService.disconnect(provider: provider)
                             refreshConnectionState()
+                        } label: {
+                            if isCompactUI {
+                                Image(systemName: "xmark.circle")
+                            } else {
+                                Text("Disconnect")
+                            }
                         }
                         .buttonStyle(.borderless)
                         .font(.subheadline)
@@ -236,6 +340,46 @@ struct SettingsView: View {
     private func refreshConnectionState() {
         googleConnected = oauthService.isConnected(provider: .google)
         print("[SettingsView] State refreshed — Google: \(googleConnected)")
+    }
+
+    private func refreshLocalModelState() {
+        localModelDownloaded = LocalMLXModelManager.shared.isModelDownloaded(modelID: localMLXModel)
+
+        Task {
+            let estimate = await LocalMLXModelManager.shared.estimatedSizeString(modelID: localMLXModel)
+            await MainActor.run {
+                localModelEstimatedSize = estimate
+            }
+        }
+    }
+
+    private func startLocalModelDownload() {
+        guard !isDownloadingLocalModel else { return }
+
+        isDownloadingLocalModel = true
+        localModelDownloadProgress = 0
+        localModelDownloadStatus = "Preparing download..."
+        localModelDownloadError = nil
+
+        Task {
+            do {
+                try await LocalMLXModelManager.shared.downloadModel(modelID: localMLXModel) { progress, currentFile in
+                    localModelDownloadProgress = progress
+                    localModelDownloadStatus = "Downloading \(currentFile)"
+                }
+                await MainActor.run {
+                    isDownloadingLocalModel = false
+                    localModelDownloadStatus = "Model download complete"
+                    refreshLocalModelState()
+                }
+            } catch {
+                await MainActor.run {
+                    isDownloadingLocalModel = false
+                    localModelDownloadError = error.localizedDescription
+                    localModelDownloadStatus = ""
+                }
+            }
+        }
     }
     
     private func connectProvider(_ provider: OAuthService.Provider) {

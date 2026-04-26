@@ -33,12 +33,20 @@ struct TripListView: View {
         .toolbar {
             ToolbarItem {
                 Button(action: { showSettings = true }) {
-                    Label("Settings", systemImage: "gear")
+                    if horizontalSizeClass == .compact {
+                        Image(systemName: "gear")
+                    } else {
+                        Label("Settings", systemImage: "gear")
+                    }
                 }
             }
             ToolbarItem {
                 Button(action: { showAddTrip = true }) {
-                    Label("Add Trip", systemImage: "plus")
+                    if horizontalSizeClass == .compact {
+                        Image(systemName: "plus")
+                    } else {
+                        Label("Add Trip", systemImage: "plus")
+                    }
                 }
             }
         }

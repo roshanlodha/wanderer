@@ -30,6 +30,7 @@ struct TripDetailView: View {
     @State private var showTripImporter = false
     @State private var isSourceEmailExpanded = false
     @AppStorage("classificationMode") private var classificationMode: String = "Smart"
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     
     // Manual add form state
     @State private var manualTitle = ""
@@ -79,6 +80,10 @@ struct TripDetailView: View {
 
     var hasAnyEmailSections: Bool {
         !itineraryEmails.isEmpty || !importantDocuments.isEmpty || !otherEmails.isEmpty
+    }
+
+    private var isCompactUI: Bool {
+        horizontalSizeClass == .compact
     }
 
     private var sanitizedTripFileName: String {
@@ -199,7 +204,11 @@ struct TripDetailView: View {
                             ProgressView()
                                 .controlSize(.small)
                         } else {
-                            Label("Sync Emails", systemImage: "envelope.arrow.triangle.branch")
+                            if isCompactUI {
+                                Image(systemName: "envelope.arrow.triangle.branch")
+                            } else {
+                                Label("Sync Emails", systemImage: "envelope.arrow.triangle.branch")
+                            }
                         }
                     }
                     .disabled(isBusy)
@@ -296,7 +305,13 @@ struct TripDetailView: View {
                         selectedDetailTab = tab
                     }
                 } label: {
-                    Label(tab.title, systemImage: tab.systemImage)
+                    Group {
+                        if isCompactUI {
+                            Image(systemName: tab.systemImage)
+                        } else {
+                            Label(tab.title, systemImage: tab.systemImage)
+                        }
+                    }
                         .font(.subheadline)
                         .fontWeight(.semibold)
                         .frame(maxWidth: .infinity)
@@ -435,7 +450,13 @@ struct TripDetailView: View {
                     Button(role: .destructive) {
                         stopClassification()
                     } label: {
-                        Label("Stop Classification", systemImage: "stop.fill")
+                        Group {
+                            if isCompactUI {
+                                Image(systemName: "stop.fill")
+                            } else {
+                                Label("Stop Classification", systemImage: "stop.fill")
+                            }
+                        }
                             .font(.caption)
                             .fontWeight(.semibold)
                     }
@@ -445,7 +466,13 @@ struct TripDetailView: View {
                     Button(role: .destructive) {
                         stopParsing()
                     } label: {
-                        Label("Stop Parsing", systemImage: "stop.fill")
+                        Group {
+                            if isCompactUI {
+                                Image(systemName: "stop.fill")
+                            } else {
+                                Label("Stop Parsing", systemImage: "stop.fill")
+                            }
+                        }
                             .font(.caption)
                             .fontWeight(.semibold)
                     }
@@ -518,7 +545,13 @@ struct TripDetailView: View {
                         Button {
                             extractAllEmails()
                         } label: {
-                            Label("Extract All", systemImage: "sparkles")
+                            Group {
+                                if isCompactUI {
+                                    Image(systemName: "sparkles")
+                                } else {
+                                    Label("Extract All", systemImage: "sparkles")
+                                }
+                            }
                                 .font(.caption)
                                 .fontWeight(.semibold)
                         }
@@ -821,7 +854,13 @@ struct TripDetailView: View {
                     Button {
                         primaryAction()
                     } label: {
-                        Label(primaryActionTitle, systemImage: primaryActionSystemImage)
+                        Group {
+                            if isCompactUI {
+                                Image(systemName: primaryActionSystemImage)
+                            } else {
+                                Label(primaryActionTitle, systemImage: primaryActionSystemImage)
+                            }
+                        }
                             .font(.caption)
                             .fontWeight(.semibold)
                     }
@@ -832,7 +871,13 @@ struct TripDetailView: View {
                         Button {
                             secondaryAction()
                         } label: {
-                            Label(secondaryActionTitle, systemImage: secondaryActionSystemImage)
+                            Group {
+                                if isCompactUI {
+                                    Image(systemName: secondaryActionSystemImage)
+                                } else {
+                                    Label(secondaryActionTitle, systemImage: secondaryActionSystemImage)
+                                }
+                            }
                                 .font(.caption)
                                 .fontWeight(.semibold)
                         }

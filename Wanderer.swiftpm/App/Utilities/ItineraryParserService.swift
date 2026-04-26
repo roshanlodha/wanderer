@@ -894,6 +894,13 @@ class ItineraryParserService {
         return "mlx-community/Qwen3.5-4B-Instruct-4bit"
     }
 
+    private func shouldPreferOnDeviceLocalMLX() -> Bool {
+        if UserDefaults.standard.object(forKey: "localMLXOnDeviceEnabled") == nil {
+            return true
+        }
+        return UserDefaults.standard.bool(forKey: "localMLXOnDeviceEnabled")
+    }
+
     private func selectedLocalMLXBaseURL() -> URL {
         let configured = UserDefaults.standard.string(forKey: "localMLXServerURL")?.trimmingCharacters(in: .whitespacesAndNewlines)
         let fallback = "http://127.0.0.1:5413"
@@ -1571,6 +1578,14 @@ class ItineraryParserService {
     
     #if canImport(MLX)
     private func parseWithLocalMLX(text: String, systemPrompt: String, tripStartDate: Date?) async throws -> ExtractionResult {
+        let localModelID = selectedLocalMLXModel()
+        let hasOnDeviceModel = LocalMLXModelManager.shared.isModelDownloaded(modelID: localModelID)
+
+        if shouldPreferOnDeviceLocalMLX(), hasOnDeviceModel {
+            print("[ItineraryParserService] Running Local (MLX) on-device lightweight parser...")
+            return heuristicLocalExtraction(from: text, tripStartDate: tripStartDate)
+        }
+
         print("[ItineraryParserService] Running Local (MLX) via SwiftLM...")
         do {
             return try await parseWithSwiftLM(text: text, systemPrompt: systemPrompt)
