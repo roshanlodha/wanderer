@@ -1582,8 +1582,25 @@ class ItineraryParserService {
         let hasOnDeviceModel = LocalMLXModelManager.shared.isModelDownloaded(modelID: localModelID)
 
         if shouldPreferOnDeviceLocalMLX(), hasOnDeviceModel {
-            print("[ItineraryParserService] Running Local (MLX) on-device lightweight parser...")
-            return heuristicLocalExtraction(from: text, tripStartDate: tripStartDate)
+            print("[ItineraryParserService] Running Local (MLX) on-device inference...")
+            do {
+                let response = try await LocalMLXModelManager.shared.generate(
+                    modelID: localModelID,
+                    prompt: text,
+                    systemPrompt: systemPrompt
+                )
+                
+                guard let jsonString = extractJSONObjectString(from: response),
+                      let jsonData = jsonString.data(using: .utf8) else {
+                    print("[ItineraryParserService] Local MLX response was not valid JSON, falling back to heuristic.")
+                    return heuristicLocalExtraction(from: text, tripStartDate: tripStartDate)
+                }
+                
+                return try JSONDecoder().decode(ExtractionResult.self, from: jsonData)
+            } catch {
+                print("[ItineraryParserService] Local MLX inference failed: \(error.localizedDescription). Falling back to heuristic.")
+                return heuristicLocalExtraction(from: text, tripStartDate: tripStartDate)
+            }
         }
 
         print("[ItineraryParserService] Running Local (MLX) via SwiftLM...")

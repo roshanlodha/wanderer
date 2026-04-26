@@ -1,4 +1,8 @@
 import Foundation
+import MLX
+import MLXLLM
+import MLXLMCommon
+import MLXHuggingFace
 
 final class LocalMLXModelManager {
     struct RemoteFile: Decodable {
@@ -14,6 +18,8 @@ final class LocalMLXModelManager {
         case invalidModelID
         case cannotCreateStorage
         case downloadFailed(String)
+        case modelNotDownloaded
+        case inferenceFailed(String)
 
         var errorDescription: String? {
             switch self {
@@ -23,6 +29,10 @@ final class LocalMLXModelManager {
                 return "Unable to create on-device model storage"
             case .downloadFailed(let message):
                 return "Model download failed: \(message)"
+            case .modelNotDownloaded:
+                return "Model is not downloaded"
+            case .inferenceFailed(let message):
+                return "Inference failed: \(message)"
             }
         }
     }
@@ -30,6 +40,95 @@ final class LocalMLXModelManager {
     static let shared = LocalMLXModelManager()
 
     private init() {}
+
+    private var loadedModel: (id: String, container: ModelContainer)?
+
+    struct Capability {
+        let canRun: Bool
+        let reason: String?
+        let recommendedModelID: String
+    }
+
+    func recommendedModelIDForCurrentDevice() -> String {
+        let memoryGB = deviceMemoryGB()
+
+        if memoryGB < 6 {
+            return "mlx-community/SmolLM2-135M-Instruct-4bit"
+        }
+
+        if memoryGB < 8 {
+            return "mlx-community/Qwen2.5-0.5B-Instruct-4bit"
+        }
+
+        if memoryGB < 12 {
+            return "mlx-community/Qwen2.5-1.5B-Instruct-4bit"
+        }
+
+        return "mlx-community/Qwen2.5-3B-Instruct-4bit"
+    }
+
+    func capability(for modelID: String) -> Capability {
+        let memoryGB = deviceMemoryGB()
+        let recommended = recommendedModelIDForCurrentDevice()
+
+        let estimatedModelSizeGB = estimateModelSizeGB(modelID: modelID)
+        let requiredMemoryGB = max(4.0, estimatedModelSizeGB * 2.6)
+
+        if memoryGB + 0.01 < requiredMemoryGB {
+            return Capability(
+                canRun: false,
+                reason: "This model likely requires about \(String(format: "%.1f", requiredMemoryGB)) GB RAM. Device has \(String(format: "%.1f", memoryGB)) GB.",
+                recommendedModelID: recommended
+            )
+        }
+
+        return Capability(canRun: true, reason: nil, recommendedModelID: recommended)
+    }
+
+    func generate(
+        modelID: String,
+        prompt: String,
+        systemPrompt: String,
+        maxTokens: Int = 2048
+    ) async throws -> String {
+        let container: ModelContainer
+
+        if let loaded = loadedModel, loaded.id == modelID {
+            container = loaded.container
+        } else {
+            guard isModelDownloaded(modelID: modelID) else {
+                throw DownloadError.modelNotDownloaded
+            }
+
+            let modelURL = try modelDirectory(for: modelID)
+            
+            // Use MLXHuggingFace to load the model and tokenizer from the local directory
+            let modelConfiguration = ModelConfiguration(directory: modelURL)
+            container = try await LLMModelFactory.shared.loadContainer(configuration: modelConfiguration)
+
+            loadedModel = (id: modelID, container: container)
+        }
+
+        let messages = [
+            ["role": "system", "content": systemPrompt],
+            ["role": "user", "content": prompt]
+        ]
+        
+        // Apply chat template if supported by the model's tokenizer
+        let promptTokens = container.tokenizer.applyChatTemplate(messages: messages)
+
+        let result = try await container.generate(
+            parameters: GenerateParameters(maxTokens: maxTokens),
+            tokens: promptTokens
+        )
+        
+        return result.output
+    }
+
+    func clearLoadedModel() {
+        loadedModel = nil
+        MLX.GPU.clearCache()
+    }
 
     func modelDirectory(for modelID: String) throws -> URL {
         let sanitized = modelID
@@ -50,6 +149,27 @@ final class LocalMLXModelManager {
 
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
+    }
+
+    private func deviceMemoryGB() -> Double {
+        Double(ProcessInfo.processInfo.physicalMemory) / 1_073_741_824.0
+    }
+
+    private func estimateModelSizeGB(modelID: String) -> Double {
+        let lower = modelID.lowercased()
+
+        if lower.contains("135m") { return 0.2 }
+        if lower.contains("270m") { return 0.35 }
+        if lower.contains("500m") || lower.contains("0.5b") { return 0.6 }
+        if lower.contains("0.6b") { return 0.7 }
+        if lower.contains("1b") || lower.contains("1.0b") { return 1.2 }
+        if lower.contains("1.5b") || lower.contains("1_5b") { return 1.8 }
+        if lower.contains("2b") { return 2.5 }
+        if lower.contains("3b") { return 3.4 }
+        if lower.contains("4b") { return 4.3 }
+        if lower.contains("7b") || lower.contains("8b") { return 7.5 }
+
+        return 4.3
     }
 
     func isModelDownloaded(modelID: String) -> Bool {

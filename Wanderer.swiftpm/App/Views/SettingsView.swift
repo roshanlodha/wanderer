@@ -19,7 +19,7 @@ struct SettingsView: View {
     @AppStorage("classificationEngine") private var classificationEngine: String = "Apple Intelligence"
     @AppStorage("classificationCloudModelSelection") private var classificationCloudModelSelection: String = "Nano"
     @AppStorage("localMLXServerURL") private var localMLXServerURL: String = "http://127.0.0.1:5413"
-    @AppStorage("localMLXModel") private var localMLXModel: String = "mlx-community/Qwen3.5-4B-Instruct-4bit"
+    @AppStorage("localMLXModel") private var localMLXModel: String = "mlx-community/Qwen2.5-1.5B-Instruct-4bit"
     @AppStorage("localMLXOnDeviceEnabled") private var localMLXOnDeviceEnabled: Bool = true
     @State private var openAIApiKey: String = ""
     @State private var isDownloadingLocalModel = false
@@ -96,10 +96,20 @@ struct SettingsView: View {
                                 .onChange(of: openAIApiKey) { _, newValue in
                                     KeychainManager.shared.save(newValue, forKey: .openAIApiKey)
                                 }
-                        } else if classificationEngine == "Local (MLX)" {
-                            TextField("SwiftLM Model", text: $localMLXModel)
-                                .textInputAutocapitalization(.never)
-                                .autocorrectionDisabled()
+                        if classificationEngine == "Local (MLX)" {
+                            HStack {
+                                TextField("SwiftLM Model", text: $localMLXModel)
+                                    .textInputAutocapitalization(.never)
+                                    .autocorrectionDisabled()
+                                
+                                Button {
+                                    localMLXModel = LocalMLXModelManager.shared.recommendedModelIDForCurrentDevice()
+                                } label: {
+                                    Image(systemName: "sparkles")
+                                }
+                                .buttonStyle(.bordered)
+                                .help("Reset to recommended model for this device")
+                            }
 
                             Toggle("Prefer On-Device Model", isOn: $localMLXOnDeviceEnabled)
 
@@ -118,7 +128,7 @@ struct SettingsView: View {
                     } else if classificationEngine == "Apple Intelligence" {
                         Text("Smart mode uses on-device Apple Intelligence by default for lightweight local classification.")
                     } else if classificationEngine == "Local (MLX)" {
-                        Text("Smart mode supports on-device model downloads and optional SwiftLM server fallback. Default model is Qwen3.5-4B.")
+                        Text("Smart mode supports on-device model downloads and optional SwiftLM server fallback. Recommended: Qwen2.5.")
                     } else {
                         Text("Smart mode uses AI to split emails into Detected vs Important and filter out non-trip emails.")
                     }
@@ -144,10 +154,20 @@ struct SettingsView: View {
                             .onChange(of: openAIApiKey) { _, newValue in
                                 KeychainManager.shared.save(newValue, forKey: .openAIApiKey)
                             }
-                    } else if extractionEngine == "Local (MLX)" {
-                        TextField("SwiftLM Model", text: $localMLXModel)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
+                    if extractionEngine == "Local (MLX)" {
+                        HStack {
+                            TextField("SwiftLM Model", text: $localMLXModel)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+
+                            Button {
+                                localMLXModel = LocalMLXModelManager.shared.recommendedModelIDForCurrentDevice()
+                            } label: {
+                                Image(systemName: "sparkles")
+                            }
+                            .buttonStyle(.bordered)
+                            .help("Reset to recommended model for this device")
+                        }
 
                         Toggle("Prefer On-Device Model", isOn: $localMLXOnDeviceEnabled)
 
@@ -209,14 +229,19 @@ struct SettingsView: View {
             .onChange(of: extractionEngine) { _, newValue in
                 if newValue == "Local (MLX)" && !localModelDownloaded && !isDownloadingLocalModel {
                     showLocalModelDownloadConfirm = true
+                } else if newValue != "Local (MLX)" {
+                    LocalMLXModelManager.shared.clearLoadedModel()
                 }
             }
             .onChange(of: classificationEngine) { _, newValue in
                 if newValue == "Local (MLX)" && !localModelDownloaded && !isDownloadingLocalModel {
                     showLocalModelDownloadConfirm = true
+                } else if newValue != "Local (MLX)" {
+                    LocalMLXModelManager.shared.clearLoadedModel()
                 }
             }
             .onChange(of: localMLXModel) { _, _ in
+                LocalMLXModelManager.shared.clearLoadedModel()
                 refreshLocalModelState()
             }
             .alert("Download Local Model?", isPresented: $showLocalModelDownloadConfirm) {
@@ -226,7 +251,13 @@ struct SettingsView: View {
                 }
             } message: {
                 let estimate = localModelEstimatedSize ?? "several GB"
-                Text("TripBuddy can download \(localMLXModel) from Hugging Face for on-device MLX parsing. This may use \(estimate) and mobile data.")
+                let cap = LocalMLXModelManager.shared.capability(for: localMLXModel)
+                
+                if !cap.canRun {
+                    Text("Warning: \(cap.reason ?? "This model may be too heavy for this device.")\n\nRecommended: \(cap.recommendedModelID)\n\nDownloading anyway will use \(estimate).")
+                } else {
+                    Text("TripBuddy can download \(localMLXModel) from Hugging Face for on-device MLX parsing. This may use \(estimate) and mobile data.")
+                }
             }
         }
     }
