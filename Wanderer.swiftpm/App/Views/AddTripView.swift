@@ -34,6 +34,7 @@ struct AddTripView: View {
                 }
             }
             .navigationTitle("New Trip")
+            .scrollContentBackground(.hidden)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button(action: { dismiss() }) {

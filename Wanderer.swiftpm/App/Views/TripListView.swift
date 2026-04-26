@@ -8,6 +8,7 @@ struct TripListView: View {
     @Binding var selectedTrip: Trip?
     @State private var showSettings = false
     @State private var showAddTrip = false
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     
     var body: some View {
         List(selection: $selectedTrip) {
@@ -26,6 +27,7 @@ struct TripListView: View {
             .onDelete(perform: deleteTrips)
         }
         .navigationTitle("My Trips")
+        .listStyle(horizontalSizeClass == .compact ? .insetGrouped : .sidebar)
         .overlay {
             if trips.isEmpty {
                 ContentUnavailableView(

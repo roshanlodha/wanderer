@@ -1,5 +1,11 @@
 import SwiftUI
 
+private struct AgendaDay: Identifiable {
+    let id: Date
+    let date: Date
+    let items: [ItineraryItem]
+}
+
 private struct CalendarSegment: Identifiable {
     let id: String
     let item: ItineraryItem
@@ -26,10 +32,12 @@ struct WeeklyCalendarView: View {
 
     @State private var weekStartDate: Date
     @AppStorage("calendarTimeZoneIdentifier") private var calendarTimeZoneIdentifier: String = ""
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     private let hourHeight: CGFloat = 88
     private let timeColumnWidth: CGFloat = 72
     private let dayColumnWidth: CGFloat = 170
+    private let compactLayoutBreakpoint: CGFloat = 900
 
     init(trip: Trip) {
         self.trip = trip
@@ -214,119 +222,312 @@ struct WeeklyCalendarView: View {
         return resolveOverlaps(for: segments)
     }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            header
-            weekdayHeader
+    private var agendaDays: [AgendaDay] {
+        let grouped = Dictionary(grouping: trip.items.sorted { $0.startTime < $1.startTime }) { userCalendar.startOfDay(for: $0.startTime) }
 
-            if trip.items.isEmpty {
-                ContentUnavailableView {
-                    Label("No Events Yet", systemImage: "calendar")
-                } description: {
-                    Text("Sync or add itinerary items to populate the calendar.")
-                }
-                .frame(maxWidth: .infinity, minHeight: 360)
-            } else {
-                ScrollView([.vertical, .horizontal]) {
-                    ZStack(alignment: .topLeading) {
-                        backgroundGrid
-                        ForEach(hotelLayout.segments) { segment in
-                            hotelStayCard(segment)
+        return weekDays.compactMap { day in
+            let dayStart = userCalendar.startOfDay(for: day)
+            guard let items = grouped[dayStart], !items.isEmpty else { return nil }
+            return AgendaDay(id: dayStart, date: day, items: items)
+        }
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            let isCompactLayout = horizontalSizeClass == .compact || proxy.size.width < compactLayoutBreakpoint
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    header(isCompactLayout: isCompactLayout)
+
+                    if trip.items.isEmpty {
+                        ContentUnavailableView {
+                            Label("No Events Yet", systemImage: "calendar")
+                        } description: {
+                            Text("Sync or add itinerary items to populate the calendar.")
                         }
-                        currentTimeIndicator
-                        ForEach(weekSegments) { segment in
-                            segmentCard(segment)
+                        .frame(maxWidth: .infinity, minHeight: isCompactLayout ? 280 : 360)
+                    } else if isCompactLayout {
+                        compactAgendaView
+                    } else {
+                        weekdayHeader
+
+                        ScrollView([.vertical, .horizontal]) {
+                            ZStack(alignment: .topLeading) {
+                                backgroundGrid
+                                ForEach(hotelLayout.segments) { segment in
+                                    hotelStayCard(segment)
+                                }
+                                currentTimeIndicator
+                                ForEach(weekSegments) { segment in
+                                    segmentCard(segment)
+                                }
+                            }
+                            .frame(
+                                width: timeColumnWidth + (dayColumnWidth * CGFloat(weekDays.count)),
+                                height: totalGridHeight
+                            )
                         }
+                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .stroke(Color.black.opacity(0.06), lineWidth: 1)
+                        )
                     }
-                    .frame(
-                        width: timeColumnWidth + (dayColumnWidth * CGFloat(weekDays.count)),
-                        height: totalGridHeight
-                    )
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(Color.black.opacity(0.06), lineWidth: 1)
-                )
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
 
-    private var header: some View {
+    private func header(isCompactLayout: Bool) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .center) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Calendar")
-                        .font(.title2)
-                        .fontWeight(.bold)
-                    Text("Showing events in selected timezone")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                }
-
-                Spacer()
-
-                HStack(spacing: 10) {
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            weekStartDate = userCalendar.date(byAdding: .day, value: -7, to: weekStartDate) ?? weekStartDate
-                        }
-                    } label: {
-                        Image(systemName: "chevron.left")
+            if isCompactLayout {
+                VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Calendar")
+                            .font(.title2)
+                            .fontWeight(.bold)
+                        Text(weekRangeLabel)
+                            .font(.headline)
+                        Text("Showing events in selected timezone")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
                     }
-                    .buttonStyle(.bordered)
 
-                    Button("Today") {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            weekStartDate = Self.initialWeekStart(for: trip)
+                    HStack(spacing: 10) {
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                weekStartDate = userCalendar.date(byAdding: .day, value: -7, to: weekStartDate) ?? weekStartDate
+                            }
+                        } label: {
+                            Image(systemName: "chevron.left")
+                                .frame(width: 18)
                         }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.orange)
+                        .buttonStyle(.bordered)
 
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            weekStartDate = userCalendar.date(byAdding: .day, value: 7, to: weekStartDate) ?? weekStartDate
-                        }
-                    } label: {
-                        Image(systemName: "chevron.right")
-                    }
-                    .buttonStyle(.bordered)
-
-                    Menu {
-                        Picker("Calendar Time Zone", selection: $calendarTimeZoneIdentifier) {
-                            Text("Device Time Zone").tag("")
-                            ForEach(availableTimeZones, id: \.identifier) { timeZone in
-                                Text(timeZoneDisplayName(timeZone)).tag(timeZone.identifier)
+                        Button("Today") {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                weekStartDate = Self.initialWeekStart(for: trip)
                             }
                         }
-                    } label: {
-                        Label("Time Zone", systemImage: "globe")
+                        .buttonStyle(.borderedProminent)
+                        .tint(.orange)
+
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                weekStartDate = userCalendar.date(byAdding: .day, value: 7, to: weekStartDate) ?? weekStartDate
+                            }
+                        } label: {
+                            Image(systemName: "chevron.right")
+                                .frame(width: 18)
+                        }
+                        .buttonStyle(.bordered)
+
+                        Spacer(minLength: 0)
                     }
-                    .menuStyle(.borderlessButton)
-                    .buttonStyle(.bordered)
+
+                    HStack {
+                        Text(currentTimeZoneLabel)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+
+                        Spacer()
+
+                        Menu {
+                            Picker("Calendar Time Zone", selection: $calendarTimeZoneIdentifier) {
+                                Text("Device Time Zone").tag("")
+                                ForEach(availableTimeZones, id: \.identifier) { timeZone in
+                                    Text(timeZoneDisplayName(timeZone)).tag(timeZone.identifier)
+                                }
+                            }
+                        } label: {
+                            Label("Time Zone", systemImage: "globe")
+                        }
+                        .menuStyle(.borderlessButton)
+                        .buttonStyle(.bordered)
+                    }
+
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 12) {
+                            legendSwatch(.flight)
+                            legendSwatch(.hotel)
+                            legendSwatch(.train)
+                            legendSwatch(.bus)
+                            legendSwatch(.activity)
+                        }
+                        .padding(.trailing, 8)
+                    }
                 }
-            }
+            } else {
+                HStack(alignment: .center) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Calendar")
+                            .font(.title2)
+                            .fontWeight(.bold)
+                        Text("Showing events in selected timezone")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
 
-            HStack(alignment: .center) {
-                Text(weekRangeLabel)
-                    .font(.headline)
+                    Spacer()
 
-                Spacer()
+                    HStack(spacing: 10) {
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                weekStartDate = userCalendar.date(byAdding: .day, value: -7, to: weekStartDate) ?? weekStartDate
+                            }
+                        } label: {
+                            Image(systemName: "chevron.left")
+                        }
+                        .buttonStyle(.bordered)
 
-                Text(currentTimeZoneLabel)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                        Button("Today") {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                weekStartDate = Self.initialWeekStart(for: trip)
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.orange)
 
-                HStack(spacing: 12) {
-                    legendSwatch(.flight)
-                    legendSwatch(.hotel)
-                    legendSwatch(.train)
-                    legendSwatch(.bus)
-                    legendSwatch(.activity)
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                weekStartDate = userCalendar.date(byAdding: .day, value: 7, to: weekStartDate) ?? weekStartDate
+                            }
+                        } label: {
+                            Image(systemName: "chevron.right")
+                        }
+                        .buttonStyle(.bordered)
+
+                        Menu {
+                            Picker("Calendar Time Zone", selection: $calendarTimeZoneIdentifier) {
+                                Text("Device Time Zone").tag("")
+                                ForEach(availableTimeZones, id: \.identifier) { timeZone in
+                                    Text(timeZoneDisplayName(timeZone)).tag(timeZone.identifier)
+                                }
+                            }
+                        } label: {
+                            Label("Time Zone", systemImage: "globe")
+                        }
+                        .menuStyle(.borderlessButton)
+                        .buttonStyle(.bordered)
+                    }
+                }
+
+                HStack(alignment: .center) {
+                    Text(weekRangeLabel)
+                        .font(.headline)
+
+                    Spacer()
+
+                    Text(currentTimeZoneLabel)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    HStack(spacing: 12) {
+                        legendSwatch(.flight)
+                        legendSwatch(.hotel)
+                        legendSwatch(.train)
+                        legendSwatch(.bus)
+                        legendSwatch(.activity)
+                    }
                 }
             }
         }
+    }
+
+    private var compactAgendaView: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ForEach(agendaDays) { day in
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(alignment: .firstTextBaseline) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(day.date, format: .dateTime.weekday(.wide))
+                                .font(.headline)
+                            Text(day.date, format: .dateTime.month().day())
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+
+                        Spacer()
+
+                        Text("\(day.items.count) item\(day.items.count == 1 ? "" : "s")")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
+                    VStack(spacing: 10) {
+                        ForEach(day.items) { item in
+                            compactAgendaCard(for: item)
+                        }
+                    }
+                }
+                .padding(16)
+                .background(Color(.secondarySystemGroupedBackground))
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            }
+        }
+    }
+
+    private func compactAgendaCard(for item: ItineraryItem) -> some View {
+        Button {
+            onSelectItem?(item)
+        } label: {
+            HStack(alignment: .top, spacing: 12) {
+                ZStack {
+                    Circle()
+                        .fill(item.travelMode.calendarColor.opacity(0.15))
+                        .frame(width: 34, height: 34)
+
+                    Image(systemName: item.travelMode.icon)
+                        .font(.caption)
+                        .foregroundColor(item.travelMode.calendarColor)
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(item.title)
+                            .font(.headline)
+                            .foregroundColor(.primary)
+                            .lineLimit(2)
+
+                        Spacer(minLength: 8)
+
+                        Text(formattedTimeRange(item))
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
+                    if !item.locationName.isEmpty {
+                        Label(item.locationName, systemImage: "mappin.and.ellipse")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .lineLimit(2)
+                    }
+
+                    if let provider = item.provider, !provider.isEmpty {
+                        Label(provider, systemImage: "building.2")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+
+                Image(systemName: "chevron.right")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .padding(.top, 4)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(.systemBackground))
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(Color.black.opacity(0.05), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
     }
 
     private func legendSwatch(_ mode: TravelMode) -> some View {
@@ -573,6 +774,12 @@ struct WeeklyCalendarView: View {
         formatter.timeZone = calendarTimeZone
         formatter.dateFormat = "h:mm a"
         return formatter.string(from: date)
+    }
+
+    private func formattedTimeRange(_ item: ItineraryItem) -> String {
+        let start = formattedTime(item.startTime, item: item)
+        let end = formattedTime(item.endTime ?? item.startTime.addingTimeInterval(3600), item: item)
+        return "\(start) - \(end)"
     }
 
     private func hourLabel(for hour: Int) -> String {

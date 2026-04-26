@@ -12,6 +12,7 @@ struct TripMapView: View {
     let trip: Trip
     var onSelectItem: ((ItineraryItem) -> Void)? = nil
 
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var cameraPosition: MapCameraPosition = .automatic
     @State private var mappedItems: [MappedItem] = []
     @State private var isLoading = false
@@ -28,8 +29,8 @@ struct TripMapView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
+            if horizontalSizeClass == .compact {
+                VStack(alignment: .leading, spacing: 8) {
                     Text("Map")
                         .font(.title2)
                         .fontWeight(.bold)
@@ -37,12 +38,23 @@ struct TripMapView: View {
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                 }
+            } else {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Map")
+                            .font(.title2)
+                            .fontWeight(.bold)
+                        Text("Tap a pin to edit the same itinerary event.")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
 
-                Spacer()
+                    Spacer()
 
-                if isLoading {
-                    ProgressView()
-                        .controlSize(.small)
+                    if isLoading {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
                 }
             }
 
@@ -88,7 +100,7 @@ struct TripMapView: View {
                         }
                     }
                 }
-                .frame(minHeight: 420)
+                .frame(minHeight: horizontalSizeClass == .compact ? 300 : 420)
                 .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
