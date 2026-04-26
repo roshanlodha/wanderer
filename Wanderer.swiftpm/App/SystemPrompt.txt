@@ -28,8 +28,9 @@ CRITICAL EXTRACTION RULES & EDGE CASES:
 - Multi-Day Events: For events spanning several days (e.g., "May 11-13 Wedding"), create a single "Activity" item spanning the start date to the end date, detailing the sub-events in the `notes`.
 
 4. Categorization (`travelMode`):
-- Allowed values ONLY: "Flight", "Hotel", "Bus", "Train", "Activity". 
-- Use "Activity" for dining, weddings, tours, or unstructured events.
+- Allowed values ONLY: "Flight", "Hotel", "Bus", "Train", "Activity", "Restaurant". 
+- Use "Restaurant" for dining/meals.
+- Use "Activity" for weddings, tours, and other non-meal events.
 
 5. The Notes Field (Data Catch-All):
 - Do not lose granular data. Use the `notes` field to store: Seat numbers, coach numbers, secondary booking references, loyalty statuses (e.g., Marriott Gold Elite), specific check-in instructions (e.g., "Coordinate with host Diogo"), or refundable statuses.
@@ -58,7 +59,7 @@ EXPECTED SCHEMA:
       "provider": "String (optional)",
       "bookingReference": "String (optional)",
       "alternativeReference": "String (optional)",
-      "travelMode": "Flight | Hotel | Bus | Train | Activity",
+      "travelMode": "Flight | Hotel | Bus | Train | Activity | Restaurant",
       "notes": "String (optional)"
     }
   ]
@@ -125,7 +126,7 @@ GOLD STANDARD EXAMPLE OUTPUT:
       "provider": "OpenTable",
       "bookingReference": "65450",
       "alternativeReference": null,
-      "travelMode": "Activity",
+      "travelMode": "Restaurant",
       "notes": null
     },
     {
@@ -165,7 +166,7 @@ JSON SCHEMA TO FOLLOW EXACTLY:
       "provider": "String or null",
       "bookingReference": "String or null",
       "alternativeReference": "String or null",
-      "travelMode": "Flight|Hotel|Bus|Train|Activity",
+      "travelMode": "Flight|Hotel|Bus|Train|Activity|Restaurant",
       "notes": "String or null"
     }
   ]

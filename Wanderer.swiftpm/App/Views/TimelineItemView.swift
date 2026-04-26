@@ -164,6 +164,7 @@ struct TimelineItemView: View {
         case .bus: return .orange
         case .train: return .teal
         case .activity: return .green
+        case .restaurant: return .pink
         case .document: return .purple
         case .other: return .gray
         }

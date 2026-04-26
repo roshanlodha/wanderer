@@ -11,23 +11,16 @@ struct TripListView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     
     var body: some View {
-        List(selection: $selectedTrip) {
-            ForEach(trips) { trip in
-                NavigationLink(value: trip) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(trip.name)
-                            .font(.headline)
-                        Text("\(trip.startDate, format: .dateTime.month().day()) - \(trip.endDate, format: .dateTime.month().day())")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                    }
-                    .padding(.vertical, 4)
-                }
+        Group {
+            if horizontalSizeClass == .compact {
+                tripList
+                    .listStyle(.insetGrouped)
+            } else {
+                tripList
+                    .listStyle(.sidebar)
             }
-            .onDelete(perform: deleteTrips)
         }
         .navigationTitle("My Trips")
-        .listStyle(horizontalSizeClass == .compact ? .insetGrouped : .sidebar)
         .overlay {
             if trips.isEmpty {
                 ContentUnavailableView(
@@ -54,6 +47,24 @@ struct TripListView: View {
         }
         .sheet(isPresented: $showAddTrip) {
             AddTripView()
+        }
+    }
+
+    private var tripList: some View {
+        List(selection: $selectedTrip) {
+            ForEach(trips) { trip in
+                NavigationLink(value: trip) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(trip.name)
+                            .font(.headline)
+                        Text("\(trip.startDate, format: .dateTime.month().day()) - \(trip.endDate, format: .dateTime.month().day())")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+            .onDelete(perform: deleteTrips)
         }
     }
     

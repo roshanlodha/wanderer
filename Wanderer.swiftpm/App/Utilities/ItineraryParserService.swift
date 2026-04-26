@@ -428,6 +428,291 @@ class ItineraryParserService {
             return nil
         }
     }
+
+    func patchLocationName(
+        currentLocation: String,
+        title: String?,
+        provider: String?,
+        notes: String?,
+        rawContext: String?,
+        travelMode: TravelMode,
+        peerLocations: [String]
+    ) async -> String? {
+        let trimmedCurrent = currentLocation.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedCurrent.isEmpty else { return nil }
+
+        let contextBlob = [title, provider, notes, rawContext]
+            .compactMap { $0 }
+            .joined(separator: "\n")
+        let contextTokens = normalizedSearchTokens(from: contextBlob)
+        let currentTokens = normalizedSearchTokens(from: trimmedCurrent)
+
+        let queries = candidateLocationQueries(
+            currentLocation: trimmedCurrent,
+            title: title,
+            provider: provider,
+            rawContext: rawContext,
+            travelMode: travelMode
+        )
+
+        let peerCandidates = peerLocations
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && $0.caseInsensitiveCompare(trimmedCurrent) != .orderedSame }
+        let tripCenter = await inferredTripCenter(from: peerCandidates)
+
+        var best: (score: Double, placemark: CLPlacemark)?
+
+        for query in queries.prefix(6) {
+            if Task.isCancelled { return nil }
+
+            do {
+                let placemarks = try await geocoder.geocodeAddressString(query)
+                for placemark in placemarks.prefix(6) {
+                    let score = locationScore(
+                        placemark: placemark,
+                        currentTokens: currentTokens,
+                        contextTokens: contextTokens,
+                        query: query,
+                        travelMode: travelMode,
+                        tripCenter: tripCenter,
+                        rawContext: contextBlob
+                    )
+
+                    if let best, best.score >= score {
+                        continue
+                    }
+                    best = (score, placemark)
+                }
+            } catch {
+                continue
+            }
+        }
+
+        guard let bestPlacemark = best?.placemark else { return nil }
+        let patched = compactLocationString(from: bestPlacemark)
+        guard !patched.isEmpty else { return nil }
+        guard patched.caseInsensitiveCompare(trimmedCurrent) != .orderedSame else { return nil }
+        return patched
+    }
+
+    private func inferredTripCenter(from locationNames: [String]) async -> CLLocation? {
+        var coordinates: [CLLocationCoordinate2D] = []
+
+        for locationName in locationNames.prefix(6) {
+            if Task.isCancelled { return nil }
+            do {
+                let placemarks = try await geocoder.geocodeAddressString(locationName)
+                if let coordinate = placemarks.first?.location?.coordinate {
+                    coordinates.append(coordinate)
+                }
+            } catch {
+                continue
+            }
+        }
+
+        guard !coordinates.isEmpty else { return nil }
+
+        let avgLat = coordinates.map(\.latitude).reduce(0, +) / Double(coordinates.count)
+        let avgLon = coordinates.map(\.longitude).reduce(0, +) / Double(coordinates.count)
+        return CLLocation(latitude: avgLat, longitude: avgLon)
+    }
+
+    private func locationScore(
+        placemark: CLPlacemark,
+        currentTokens: Set<String>,
+        contextTokens: Set<String>,
+        query: String,
+        travelMode: TravelMode,
+        tripCenter: CLLocation?,
+        rawContext: String
+    ) -> Double {
+        let fieldText = locationFieldText(placemark)
+        let fieldTokens = normalizedSearchTokens(from: fieldText)
+        var score = 0.0
+
+        score += Double(currentTokens.intersection(fieldTokens).count) * 4.0
+        score += Double(contextTokens.intersection(fieldTokens).count) * 1.8
+
+        let lowerContext = rawContext.lowercased()
+        if let locality = placemark.locality?.lowercased(), !locality.isEmpty, lowerContext.contains(locality) {
+            score += 3.5
+        }
+        if let adminArea = placemark.administrativeArea?.lowercased(), !adminArea.isEmpty, lowerContext.contains(adminArea) {
+            score += 1.5
+        }
+        if let country = placemark.country?.lowercased(), !country.isEmpty, lowerContext.contains(country) {
+            score += 2.5
+        }
+
+        let lowerField = fieldText.lowercased()
+        switch travelMode {
+        case .train, .bus:
+            if lowerField.contains("station") || lowerField.contains("terminal") {
+                score += 6
+            }
+        case .flight:
+            if lowerField.contains("airport") {
+                score += 6
+            }
+        case .hotel:
+            if lowerField.contains("hotel") || lowerField.contains("resort") {
+                score += 3
+            }
+        case .restaurant:
+            if ["restaurant", "cafe", "bistro", "dining", "bar"].contains(where: { lowerField.contains($0) }) {
+                score += 4
+            }
+        case .activity, .document, .other:
+            break
+        }
+
+        if query.caseInsensitiveCompare(placemark.name ?? "") == .orderedSame {
+            score += 1
+        }
+
+        if let center = tripCenter, let location = placemark.location {
+            let distance = center.distance(from: location)
+            if distance < 100_000 {
+                score += 4
+            } else if distance < 400_000 {
+                score += 2
+            } else if distance > 5_000_000 {
+                score -= 20
+            } else if distance > 2_000_000 {
+                score -= 8
+            }
+        }
+
+        return score
+    }
+
+    private func candidateLocationQueries(
+        currentLocation: String,
+        title: String?,
+        provider: String?,
+        rawContext: String?,
+        travelMode: TravelMode
+    ) -> [String] {
+        var queries: [String] = [currentLocation]
+
+        let lowerCurrent = currentLocation.lowercased()
+        switch travelMode {
+        case .train, .bus:
+            if !lowerCurrent.contains("station") && !lowerCurrent.contains("terminal") {
+                queries.append("\(currentLocation) station")
+            }
+        case .flight:
+            if !lowerCurrent.contains("airport") {
+                queries.append("\(currentLocation) airport")
+            }
+        case .restaurant:
+            if !["restaurant", "cafe", "bistro", "bar"].contains(where: { lowerCurrent.contains($0) }) {
+                queries.append("\(currentLocation) restaurant")
+            }
+        case .hotel:
+            if !lowerCurrent.contains("hotel") {
+                queries.append("\(currentLocation) hotel")
+            }
+        case .activity, .document, .other:
+            break
+        }
+
+        if let provider = provider?.trimmingCharacters(in: .whitespacesAndNewlines), !provider.isEmpty {
+            queries.append("\(currentLocation), \(provider)")
+        }
+
+        if let title = title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
+            queries.append("\(currentLocation), \(title)")
+        }
+
+        if let rawContext {
+            for phrase in likelyPlacePhrases(from: rawContext).prefix(4) {
+                if phrase.range(of: currentLocation, options: .caseInsensitive) != nil || currentLocation.range(of: phrase, options: .caseInsensitive) != nil {
+                    queries.append(phrase)
+                } else {
+                    queries.append("\(currentLocation), \(phrase)")
+                }
+            }
+        }
+
+        var seen: Set<String> = []
+        return queries.filter {
+            let normalized = $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard !normalized.isEmpty, !seen.contains(normalized) else { return false }
+            seen.insert(normalized)
+            return true
+        }
+    }
+
+    private func likelyPlacePhrases(from text: String) -> [String] {
+        let pattern = "(?i)(?:from|to|at|in|near|station|airport|hotel|restaurant)\\s+([A-Z][A-Za-z0-9'&.,\\-\\s]{2,60})"
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+
+        let nsText = text as NSString
+        let range = NSRange(location: 0, length: nsText.length)
+        let matches = regex.matches(in: text, options: [], range: range)
+
+        var phrases: [String] = []
+        for match in matches {
+            guard match.numberOfRanges > 1 else { continue }
+            let phrase = nsText.substring(with: match.range(at: 1))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            if phrase.count >= 3 {
+                phrases.append(phrase)
+            }
+        }
+        return phrases
+    }
+
+    private func normalizedSearchTokens(from text: String) -> Set<String> {
+        let lowercased = text.lowercased()
+        let cleaned = lowercased.replacingOccurrences(of: "[^a-z0-9]+", with: " ", options: .regularExpression)
+        let stopwords: Set<String> = ["the", "and", "for", "with", "from", "to", "at", "in", "on", "by", "of", "is", "a", "an"]
+        return Set(cleaned.split(separator: " ").map(String.init).filter { $0.count >= 3 && !stopwords.contains($0) })
+    }
+
+    private func locationFieldText(_ placemark: CLPlacemark) -> String {
+        [
+            placemark.name,
+            placemark.subThoroughfare,
+            placemark.thoroughfare,
+            placemark.locality,
+            placemark.subLocality,
+            placemark.administrativeArea,
+            placemark.postalCode,
+            placemark.country
+        ]
+        .compactMap { $0 }
+        .joined(separator: " ")
+    }
+
+    private func compactLocationString(from placemark: CLPlacemark) -> String {
+        var parts: [String] = []
+
+        if let name = placemark.name, !name.isEmpty {
+            parts.append(name)
+        }
+        if let locality = placemark.locality, !locality.isEmpty {
+            parts.append(locality)
+        }
+        if let admin = placemark.administrativeArea, !admin.isEmpty {
+            parts.append(admin)
+        }
+        if let country = placemark.country, !country.isEmpty {
+            parts.append(country)
+        }
+
+        var seen: Set<String> = []
+        let deduped = parts.filter {
+            let key = $0.lowercased()
+            guard !seen.contains(key) else { return false }
+            seen.insert(key)
+            return true
+        }
+
+        return deduped.joined(separator: ", ")
+    }
     
     /// Checks if a new item is a duplicate of any existing items in the trip.
     /// Two items are considered duplicates if they share the same travel mode and
@@ -540,8 +825,7 @@ class ItineraryParserService {
             }
             let end = parseExtractedDateString(item.endTimeString, gmtOffset: normalizedOffset)
             
-            let tModeStr = item.travelMode?.lowercased() ?? "other"
-            let tMode = TravelMode.allCases.first(where: { $0.rawValue.lowercased() == tModeStr }) ?? .other
+            let tMode = parsedTravelMode(from: item.travelMode)
             
             items.append(ItineraryItem(
                 title: item.title ?? "Unknown Travel Event",
@@ -686,7 +970,7 @@ class ItineraryParserService {
 
     private func classifyWithAppleIntelligence(text: String, contextText: String) async throws -> EmailTriageResult {
         #if canImport(FoundationModels)
-        if #available(iOS 18.0, macOS 15.0, macCatalyst 26.0, *) {
+        if #available(iOS 26.0, macOS 26.0, macCatalyst 26.0, *) {
             let session = LanguageModelSession()
             let truncatedText = String(text.prefix(1800))
             let prompt = appleTriagePromptTemplate
@@ -756,7 +1040,7 @@ class ItineraryParserService {
                                     "alternativeReference": ["type": ["string", "null"], "description": "Any secondary/additional confirmation, locator, or reservation number in the email"],
                                     "travelMode": [
                                         "type": "string",
-                                        "enum": ["Flight", "Hotel", "Bus", "Train", "Activity", "Document", "Other"]
+                                        "enum": ["Flight", "Hotel", "Bus", "Train", "Activity", "Restaurant", "Document", "Other"]
                                     ],
                                     "notes": ["type": ["string", "null"]]
                                 ],
@@ -904,7 +1188,7 @@ class ItineraryParserService {
     
     private func parseWithAppleIntelligence(text: String, systemPrompt: String) async throws -> ExtractionResult {
         #if canImport(FoundationModels)
-        if #available(iOS 18.0, macOS 15.0, macCatalyst 26.0, *) {
+        if #available(iOS 26.0, macOS 26.0, macCatalyst 26.0, *) {
             print("[ItineraryParserService] Running Apple Intelligence on-device extraction...")
             
             // Reuse session across calls to preserve context efficiently
@@ -995,6 +1279,9 @@ class ItineraryParserService {
     }
     
     private func inferredTravelMode(from lowercasedText: String) -> TravelMode? {
+        if lowercasedText.contains("restaurant") || lowercasedText.contains("dinner") || lowercasedText.contains("lunch") || lowercasedText.contains("breakfast") || lowercasedText.contains("meal") || lowercasedText.contains("dining") {
+            return .restaurant
+        }
         if lowercasedText.contains("hotel") || lowercasedText.contains("check-in") || lowercasedText.contains("airbnb") {
             return .hotel
         }
@@ -1011,6 +1298,38 @@ class ItineraryParserService {
             return .activity
         }
         return nil
+    }
+
+    private func parsedTravelMode(from rawValue: String?) -> TravelMode {
+        guard let value = rawValue?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
+            return .other
+        }
+
+        let lower = value.lowercased()
+
+        if ["restaurant", "meal", "dining", "dinner", "lunch", "breakfast", "brunch", "food", "cafe", "café"].contains(where: { lower.contains($0) }) {
+            return .restaurant
+        }
+        if lower.contains("flight") || lower.contains("airline") {
+            return .flight
+        }
+        if lower.contains("hotel") || lower.contains("accommodation") || lower.contains("airbnb") {
+            return .hotel
+        }
+        if lower.contains("train") || lower.contains("rail") {
+            return .train
+        }
+        if lower.contains("bus") || lower.contains("coach") {
+            return .bus
+        }
+        if lower.contains("document") || lower.contains("visa") || lower.contains("insurance") || lower.contains("passport") {
+            return .document
+        }
+        if lower.contains("activity") || lower.contains("event") || lower.contains("tour") || lower.contains("ticket") {
+            return .activity
+        }
+
+        return TravelMode.allCases.first(where: { $0.rawValue.lowercased() == lower }) ?? .other
     }
 
     private func firstDetectedDateRange(in text: String) -> (Date, Date?)? {
@@ -1120,6 +1439,8 @@ class ItineraryParserService {
             return "Bus to \(location)"
         case .activity:
             return "Activity at \(location)"
+        case .restaurant:
+            return "Meal at \(location)"
         case .document:
             return "Document: \(location)"
         case .other:

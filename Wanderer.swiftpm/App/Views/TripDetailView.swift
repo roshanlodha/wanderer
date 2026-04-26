@@ -28,6 +28,7 @@ struct TripDetailView: View {
     @State private var exportDocument: TripTransferDocument?
     @State private var showTripExporter = false
     @State private var showTripImporter = false
+    @State private var isSourceEmailExpanded = false
     @AppStorage("classificationMode") private var classificationMode: String = "Smart"
     
     // Manual add form state
@@ -42,6 +43,7 @@ struct TripDetailView: View {
     @State private var manualNotes = ""
     @State private var manualTravelMode: TravelMode = .activity
     @State private var isInferringManualTimeZone = false
+    @State private var isPatchingManualLocation = false
     @State private var hasReconciledTimeZones = false
     
     var groupedItems: [(Date, [ItineraryItem])] {
@@ -121,15 +123,13 @@ struct TripDetailView: View {
     }
     
     var body: some View {
-        ScrollView {
-            VStack(spacing: 0) {
-                detailTabPicker
-                    .padding(.bottom, 16)
+        VStack(spacing: 0) {
+            detailTabPicker
+                .padding(.bottom, 16)
 
-                activeDetailContent
-            }
-            .padding()
+            activeDetailContent
         }
+        .padding()
         .navigationTitle(trip.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -230,15 +230,20 @@ struct TripDetailView: View {
     private var activeDetailContent: some View {
         switch selectedDetailTab {
         case .overview:
-            overviewContent
+            ScrollView {
+                overviewContent
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         case .calendar:
             WeeklyCalendarView(trip: trip) { item in
                 prepareToEdit(item)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         case .map:
             TripMapView(trip: trip) { item in
                 prepareToEdit(item)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
     }
 
@@ -900,31 +905,49 @@ struct TripDetailView: View {
                         ))
                     }
 
-                    Divider()
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("GMT Offset")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
 
-                    TextField("GMT Offset", text: $manualTimeZoneGMTOffset)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
+                        TextField("e.g. +1, -5, +5:30", text: $manualTimeZoneGMTOffset)
+                            .textFieldStyle(.roundedBorder)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
 
-                    Button {
-                        inferManualTimeZone()
-                    } label: {
-                        if isInferringManualTimeZone {
-                            ProgressView()
-                        } else {
-                            Label("Infer from Location", systemImage: "globe")
+                        Button {
+                            inferManualTimeZone()
+                        } label: {
+                            if isInferringManualTimeZone {
+                                ProgressView()
+                            } else {
+                                Label("Infer from Location", systemImage: "globe")
+                            }
                         }
-                    }
-                    .disabled(isInferringManualTimeZone || manualLocation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .disabled(isInferringManualTimeZone || manualLocation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
-                    Text("Stored as a standardized GMT offset like `+1`, `-5`, or `+5:30`.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                        Text("Stored as a standardized GMT offset like +1, -5, or +5:30.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.vertical, 4)
                 }
 
                 
                 Section("Location & Provider") {
                     TextField("Location", text: $manualLocation)
+
+                    Button {
+                        patchManualLocation()
+                    } label: {
+                        if isPatchingManualLocation {
+                            ProgressView()
+                        } else {
+                            Label("Patch Location", systemImage: "wand.and.stars")
+                        }
+                    }
+                    .disabled(isPatchingManualLocation || manualLocation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
                     TextField("Provider (optional)", text: $manualProvider)
                     TextField("Booking Reference (optional)", text: $manualBookingRef)
                 }
@@ -932,6 +955,12 @@ struct TripDetailView: View {
                 Section("Notes") {
                     TextField("Notes (optional)", text: $manualNotes, axis: .vertical)
                         .lineLimit(3...6)
+                }
+
+                if editingItem != nil {
+                    Section("Source Email") {
+                        sourceEmailPreview
+                    }
                 }
             }
             .navigationTitle(editingItem == nil ? "Add Event" : "Edit Event")
@@ -955,6 +984,106 @@ struct TripDetailView: View {
                     .fontWeight(.semibold)
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private var sourceEmailPreview: some View {
+        if let emailSource = editingItem?.emailSource {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(emailSource.subject)
+                    .font(.headline)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                HStack(alignment: .firstTextBaseline) {
+                    Text(emailSource.sender)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+
+                    Spacer()
+
+                    Text(emailSource.dateReceived, format: .dateTime.month(.abbreviated).day().year())
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+
+                Text(emailSource.snippet)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        isSourceEmailExpanded.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Text("Source Email")
+                        Image(systemName: isSourceEmailExpanded ? "chevron.up" : "chevron.down")
+                    }
+                    .font(.caption)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+
+                if isSourceEmailExpanded {
+                    if let rawSource = editingItem?.rawTextSource, !rawSource.isEmpty {
+                        Text(rawSource)
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                            .padding(8)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color(.secondarySystemGroupedBackground))
+                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            .textSelection(.enabled)
+                    } else {
+                        Text(emailSource.bodyText)
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                            .lineLimit(8)
+                            .padding(8)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color(.secondarySystemGroupedBackground))
+                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            .textSelection(.enabled)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else if let rawSource = editingItem?.rawTextSource, !rawSource.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        isSourceEmailExpanded.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Text("Source Email")
+                        Image(systemName: isSourceEmailExpanded ? "chevron.up" : "chevron.down")
+                    }
+                    .font(.caption)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+
+                if isSourceEmailExpanded {
+                    Text(rawSource)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .padding(8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color(.secondarySystemGroupedBackground))
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .textSelection(.enabled)
+                }
+            }
+        } else {
+            Text("No source email is attached to this event.")
+                .font(.caption)
+                .foregroundColor(.secondary)
         }
     }
     
@@ -1193,6 +1322,7 @@ struct TripDetailView: View {
         manualTimeZoneGMTOffset = ""
         manualNotes = ""
         manualTravelMode = .activity
+        isPatchingManualLocation = false
     }
 
     private func prepareToEdit(_ item: ItineraryItem) {
@@ -1208,6 +1338,7 @@ struct TripDetailView: View {
         manualTimeZoneGMTOffset = item.timeZoneGMTOffset ?? ""
         manualNotes = item.notes ?? ""
         manualTravelMode = item.travelMode
+        isPatchingManualLocation = false
         showAddItemSheet = true
     }
 
@@ -1222,16 +1353,37 @@ struct TripDetailView: View {
             let inferred = await ItineraryParserService.shared.inferGMTOffset(from: location, at: absoluteStart)
             await MainActor.run {
                 if let inferred {
-                    // Update clock date if offset changes to preserve "listed time"
-                    let oldOffset = manualTimeZoneGMTOffset
                     manualTimeZoneGMTOffset = inferred
-                    
-                    // We want to keep the same clock time, but interpreted in the new offset.
-                    // The easiest way is to NOT change manualStartTime/manualEndTime, 
-                    // because they already represent the clock time in the device timezone.
-                    // When we save, fromLocalClockDate will use the NEW offset.
                 }
                 isInferringManualTimeZone = false
+            }
+        }
+    }
+
+    private func patchManualLocation() {
+        let currentLocation = manualLocation.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !currentLocation.isEmpty else { return }
+
+        isPatchingManualLocation = true
+        Task {
+            let sourceContext = editingItem?.rawTextSource ?? editingItem?.emailSource?.bodyText
+            let peerLocations = trip.items.map(\.locationName)
+
+            let patched = await ItineraryParserService.shared.patchLocationName(
+                currentLocation: currentLocation,
+                title: manualTitle,
+                provider: manualProvider,
+                notes: manualNotes,
+                rawContext: sourceContext,
+                travelMode: manualTravelMode,
+                peerLocations: peerLocations
+            )
+
+            await MainActor.run {
+                if let patched {
+                    manualLocation = patched
+                }
+                isPatchingManualLocation = false
             }
         }
     }

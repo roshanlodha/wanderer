@@ -37,7 +37,7 @@ struct WeeklyCalendarView: View {
     private let hourHeight: CGFloat = 88
     private let timeColumnWidth: CGFloat = 72
     private let dayColumnWidth: CGFloat = 170
-    private let compactLayoutBreakpoint: CGFloat = 900
+    private let compactLayoutBreakpoint: CGFloat = 1200
 
     init(trip: Trip) {
         self.trip = trip
@@ -355,6 +355,7 @@ struct WeeklyCalendarView: View {
                             legendSwatch(.train)
                             legendSwatch(.bus)
                             legendSwatch(.activity)
+                            legendSwatch(.restaurant)
                         }
                         .padding(.trailing, 8)
                     }
@@ -430,6 +431,7 @@ struct WeeklyCalendarView: View {
                         legendSwatch(.train)
                         legendSwatch(.bus)
                         legendSwatch(.activity)
+                        legendSwatch(.restaurant)
                     }
                 }
             }
@@ -864,6 +866,7 @@ private extension TravelMode {
         case .bus: return Color(red: 0.92, green: 0.52, blue: 0.20)
         case .train: return Color(red: 0.07, green: 0.63, blue: 0.68)
         case .activity: return Color(red: 0.18, green: 0.72, blue: 0.39)
+        case .restaurant: return Color(red: 0.91, green: 0.36, blue: 0.57)
         case .document: return Color(red: 0.72, green: 0.32, blue: 0.85)
         case .other: return Color.gray
         }

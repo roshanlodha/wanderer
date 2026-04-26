@@ -213,6 +213,7 @@ private extension TravelMode {
         case .bus: return Color(red: 0.92, green: 0.52, blue: 0.20)
         case .train: return Color(red: 0.07, green: 0.63, blue: 0.68)
         case .activity: return Color(red: 0.18, green: 0.72, blue: 0.39)
+        case .restaurant: return Color(red: 0.91, green: 0.36, blue: 0.57)
         case .document: return Color(red: 0.72, green: 0.32, blue: 0.85)
         case .other: return .gray
         }
