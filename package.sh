@@ -7,7 +7,7 @@ BUILD_DIR="$ROOT_DIR/.build"
 ARCHIVE_PATH="$BUILD_DIR/Wanderer.xcarchive"
 EXPORT_PATH="$BUILD_DIR/export"
 TEMP_DMG_DIR="$BUILD_DIR/dmg-root"
-DMG_PATH="$ROOT_DIR/Wanderer.dmg"
+DMG_PATH="$HOME/Downloads/wanderer.dmg"
 APP_NAME="Wanderer.app"
 
 echo "Building Wanderer..."
