@@ -4,18 +4,18 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$ROOT_DIR/Wanderer.swiftpm"
 BUILD_DIR="$ROOT_DIR/.build"
-ARCHIVE_PATH="$BUILD_DIR/Wanderer.xcarchive"
+ARCHIVE_PATH="$BUILD_DIR/TripBuddy.xcarchive"
 EXPORT_PATH="$BUILD_DIR/export"
 TEMP_DMG_DIR="$BUILD_DIR/dmg-root"
-DMG_PATH="$HOME/Downloads/wanderer.dmg"
-APP_NAME="Wanderer.app"
+DMG_PATH="$HOME/Downloads/tripbuddy.dmg"
+APP_NAME="TripBuddy.app"
 
-echo "Building Wanderer..."
+echo "Building TripBuddy..."
 mkdir -p "$BUILD_DIR" "$EXPORT_PATH"
 
 pushd "$PROJECT_DIR" >/dev/null
 xcodebuild \
-  -scheme Wanderer \
+  -scheme TripBuddy \
   -destination 'generic/platform=macOS' \
   -archivePath "$ARCHIVE_PATH" \
   archive
@@ -56,7 +56,7 @@ cp -R "$APP_BUNDLE" "$TEMP_DMG_DIR/"
 
 rm -f "$DMG_PATH"
 hdiutil create \
-  -volname "Wanderer" \
+  -volname "TripBuddy" \
   -srcfolder "$TEMP_DMG_DIR" \
   -ov \
   -format UDZO \

@@ -6,7 +6,7 @@ import BackgroundTasks
 class BackgroundTaskManager {
     static let shared = BackgroundTaskManager()
     
-    let emailFetchTaskIdentifier = "com.roshanlodha.Wanderer.fetchEmails"
+    let emailFetchTaskIdentifier = "com.roshanlodha.TripBuddy.fetchEmails"
     
     func registerBackgroundTasks() {
         #if os(iOS)

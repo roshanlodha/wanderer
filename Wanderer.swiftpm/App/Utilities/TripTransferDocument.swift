@@ -3,7 +3,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 extension UTType {
-    static let wandererTripJSON = UTType(exportedAs: "com.roshanlodha.wanderer.trip+json", conformingTo: .json)
+    static let tripBuddyTripJSON = UTType(exportedAs: "com.roshanlodha.tripbuddy.trip+json", conformingTo: .json)
 }
 
 struct TripTransferPayload: Codable {
@@ -18,6 +18,8 @@ struct TripTransferPayload: Codable {
         let alternativeReference: String?
         let provider: String?
         let notes: String?
+        let costAmount: Double?
+        let costCurrencyCode: String?
         let rawTextSource: String?
         let travelMode: String
     }
@@ -48,7 +50,7 @@ struct TripTransferPayload: Codable {
     let emailSources: [EmailPayload]
 
     init(trip: Trip) {
-        version = 1
+        version = 2
         exportedAt = Date()
         tripName = trip.name
         startDate = trip.startDate
@@ -68,6 +70,8 @@ struct TripTransferPayload: Codable {
                 alternativeReference: item.alternativeReference,
                 provider: item.provider,
                 notes: item.notes,
+                costAmount: item.costAmount,
+                costCurrencyCode: item.costCurrencyCode,
                 rawTextSource: item.rawTextSource,
                 travelMode: item.travelMode.rawValue
             )
@@ -91,8 +95,8 @@ struct TripTransferPayload: Codable {
 }
 
 struct TripTransferDocument: FileDocument {
-    static var readableContentTypes: [UTType] { [.wandererTripJSON, .json] }
-    static var writableContentTypes: [UTType] { [.wandererTripJSON, .json] }
+    static var readableContentTypes: [UTType] { [.tripBuddyTripJSON, .json] }
+    static var writableContentTypes: [UTType] { [.tripBuddyTripJSON, .json] }
 
     var payload: TripTransferPayload
 

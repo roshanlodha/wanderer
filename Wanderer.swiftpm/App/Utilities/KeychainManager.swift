@@ -7,17 +7,15 @@ import Security
 struct KeychainManager {
     static let shared = KeychainManager()
     
-    private let service = "com.roshanlodha.Wanderer"
+    private let service = "com.roshanlodha.TripBuddy"
     private let defaults = UserDefaults.standard
-    private let defaultsPrefix = "com.roshanlodha.Wanderer.token."
+    private let defaultsPrefix = "com.roshanlodha.TripBuddy.token."
     
     // MARK: - Token Keys
     
     enum TokenKey: String, CaseIterable {
         case googleAccessToken = "google_access_token"
         case googleRefreshToken = "google_refresh_token"
-        case microsoftAccessToken = "microsoft_access_token"
-        case microsoftRefreshToken = "microsoft_refresh_token"
         case appleUserIdentifier = "apple_user_identifier"
         case openAIApiKey = "openai_api_key"
     }

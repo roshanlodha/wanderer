@@ -48,17 +48,6 @@ class EmailFetchService {
     OR from:(booking.com OR airbnb.com OR hotels.com OR expedia.com OR kayak.com OR tripadvisor.com OR united.com OR delta.com OR aa.com OR southwest.com OR jetblue.com OR amtrak.com OR vrbo.com OR marriott.com OR hilton.com OR hyatt.com OR ihg.com OR hertz.com OR avis.com OR enterprise.com OR capitalone.com OR opentable.com OR resy.com OR virginatlantic.com OR ryanair.com OR easyjet.com OR flixbus.com OR trainline.com OR scotrail.co.uk OR ukvi OR "gov.uk" OR tfl.gov.uk OR capitalonebooking.com OR chasetravel.com OR amextravel.com OR travel.americanexpress.com OR hopper.com OR skyscanner.com OR agoda.com OR priceline.com OR travelocity.com OR orbitz.com OR cheapoair.com OR kiwi.com OR trip.com))
     """
     
-    private let microsoftSearchTerms = [
-        "flight confirmation", "booking confirmation", "reservation confirmation",
-        "hotel reservation", "itinerary", "boarding pass", "e-ticket",
-        "travel confirmation", "airbnb", "check-in", "electronic travel",
-        "ETA", "visa", "passport", "cruise", "ferry", "train", "bus",
-        "insurance", "tour", "tickets", "event", "travel document",
-        "capitalonebooking.com", "chasetravel.com", "amextravel.com",
-        "hopper.com", "skyscanner.com", "agoda.com", "priceline.com",
-        "travelocity.com", "orbitz.com", "cheapoair.com", "kiwi.com", "trip.com"
-    ]
-    
     /// Known non-travel sender patterns to filter out at the fetch level
     private let spamSenderPatterns = [
         "noreply@github.com", "notifications@github.com",
@@ -94,21 +83,6 @@ class EmailFetchService {
                 print("[EmailFetchService] Fetched \(emails.count) travel emails from Gmail.")
             } catch {
                 print("[EmailFetchService] Gmail fetch failed: \(error.localizedDescription)")
-            }
-        }
-        
-        if let msToken = keychain.get(forKey: .microsoftAccessToken) {
-            do {
-                if let accountEmail = try await fetchMicrosoftAccountEmail(accessToken: msToken) {
-                    connectedAccountEmails.insert(accountEmail)
-                }
-                let emails = try await fetchMicrosoftTravelEmails(
-                    accessToken: msToken
-                )
-                allEmails.append(contentsOf: emails)
-                print("[EmailFetchService] Fetched \(emails.count) travel emails from Microsoft.")
-            } catch {
-                print("[EmailFetchService] Microsoft fetch failed: \(error.localizedDescription)")
             }
         }
         
@@ -174,22 +148,6 @@ class EmailFetchService {
         return normalizedEmailAddress(from: profile.emailAddress)
     }
 
-    private func fetchMicrosoftAccountEmail(accessToken: String) async throws -> String? {
-        let url = URL(string: "https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName")!
-        let request = makeAuthorizedRequest(url: url, token: accessToken)
-        let (data, response) = try await URLSession.shared.data(for: request)
-
-        try validateHTTPResponse(response, data: data, context: "Microsoft profile")
-
-        struct MicrosoftProfile: Codable {
-            let mail: String?
-            let userPrincipalName: String?
-        }
-
-        let profile = try JSONDecoder().decode(MicrosoftProfile.self, from: data)
-        return normalizedEmailAddress(from: profile.mail ?? profile.userPrincipalName ?? "")
-    }
-    
     // MARK: - Gmail REST API
     
     private func fetchGmailTravelEmails(accessToken: String) async throws -> [FetchedEmail] {
@@ -230,41 +188,6 @@ class EmailFetchService {
         }
         
         return emails
-    }
-    
-    // MARK: - Microsoft Graph REST API
-    
-    private func fetchMicrosoftTravelEmails(accessToken: String) async throws -> [FetchedEmail] {
-        let keywordQuery = microsoftSearchTerms.map { "\"\($0)\"" }.joined(separator: " OR ")
-        
-        var searchComponents = URLComponents(string: "https://graph.microsoft.com/v1.0/me/messages")!
-        searchComponents.queryItems = [
-            URLQueryItem(name: "$search", value: "\"\(keywordQuery)\""),
-            URLQueryItem(name: "$top", value: "200"),
-            URLQueryItem(name: "$select", value: "id,subject,from,receivedDateTime,body")
-        ]
-        
-        let searchRequest = makeAuthorizedRequest(url: searchComponents.url!, token: accessToken)
-        let (searchData, searchResponse) = try await URLSession.shared.data(for: searchRequest)
-        
-        try validateHTTPResponse(searchResponse, data: searchData, context: "Microsoft search")
-        
-        let result = try JSONDecoder().decode(MicrosoftMessageList.self, from: searchData)
-        
-        return result.value.compactMap { msg -> FetchedEmail? in
-            let bodyText = stripHTML(from: msg.body.content)
-            guard !bodyText.isEmpty else { return nil }
-            
-            let date = parseMicrosoftDate(msg.receivedDateTime) ?? Date()
-            
-            return FetchedEmail(
-                id: msg.id,
-                subject: msg.subject,
-                sender: msg.from.emailAddress.address,
-                date: date,
-                bodyText: bodyText
-            )
-        }
     }
     
     // MARK: - Helpers
@@ -377,29 +300,6 @@ class EmailFetchService {
         return String(data: data, encoding: .utf8)
     }
 
-    private func parseMicrosoftDate(_ value: String) -> Date? {
-        let formatters: [ISO8601DateFormatter] = [
-            {
-                let formatter = ISO8601DateFormatter()
-                formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-                return formatter
-            }(),
-            {
-                let formatter = ISO8601DateFormatter()
-                formatter.formatOptions = [.withInternetDateTime]
-                return formatter
-            }()
-        ]
-
-        for formatter in formatters {
-            if let date = formatter.date(from: value) {
-                return date
-            }
-        }
-
-        return nil
-    }
-
     private func parseGmailDateHeader(_ value: String?, fallbackInternalDate: String?) -> Date? {
         if let value {
             let sanitized = value
@@ -480,29 +380,3 @@ struct GmailBody: Codable {
     let data: String?
 }
 
-// MARK: - Microsoft Graph Models
-
-struct MicrosoftMessageList: Codable {
-    let value: [MicrosoftMessage]
-}
-
-struct MicrosoftMessage: Codable {
-    let id: String
-    let subject: String
-    let from: MicrosoftFrom
-    let receivedDateTime: String
-    let body: MicrosoftBody
-}
-
-struct MicrosoftFrom: Codable {
-    let emailAddress: MicrosoftEmailAddress
-}
-
-struct MicrosoftEmailAddress: Codable {
-    let address: String
-}
-
-struct MicrosoftBody: Codable {
-    let contentType: String
-    let content: String
-}

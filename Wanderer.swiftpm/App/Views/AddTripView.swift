@@ -4,6 +4,7 @@ import SwiftData
 struct AddTripView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
+    let onTripCreated: (Trip) -> Void
     
     @State private var name: String = ""
     @State private var startDate: Date = Date()
@@ -51,6 +52,7 @@ struct AddTripView: View {
                             ignoreEmailsBeforeDate: ignoreEmailsBeforeDate ?? computedIgnoreEmailsBeforeDate
                         )
                         modelContext.insert(trip)
+                        onTripCreated(trip)
                         dismiss()
                     }
                     .disabled(name.isEmpty)

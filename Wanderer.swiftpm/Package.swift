@@ -8,16 +8,16 @@ import PackageDescription
 import AppleProductTypes
 
 let package = Package(
-    name: "Wanderer",
+    name: "TripBuddy",
     platforms: [
         .iOS("18.0"),
         .macOS("15.0")
     ],
     products: [
         .iOSApplication(
-            name: "Wanderer",
+            name: "TripBuddy",
             targets: ["AppModule"],
-            bundleIdentifier: "com.roshanlodha.Wanderer",
+            bundleIdentifier: "com.roshanlodha.TripBuddy",
             teamIdentifier: "87QG8P4C9A",
             displayVersion: "1.0",
             bundleVersion: "1",

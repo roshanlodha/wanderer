@@ -46,25 +46,51 @@ struct TripListView: View {
             SettingsView()
         }
         .sheet(isPresented: $showAddTrip) {
-            AddTripView()
+            AddTripView { createdTrip in
+                selectedTrip = createdTrip
+            }
         }
     }
 
     private var tripList: some View {
-        List(selection: $selectedTrip) {
-            ForEach(trips) { trip in
-                NavigationLink(value: trip) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(trip.name)
-                            .font(.headline)
-                        Text("\(trip.startDate, format: .dateTime.month().day()) - \(trip.endDate, format: .dateTime.month().day())")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
+        Group {
+            if horizontalSizeClass == .compact {
+                List {
+                    ForEach(trips) { trip in
+                        Button {
+                            selectedTrip = trip
+                        } label: {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(trip.name)
+                                    .font(.headline)
+                                Text("\(trip.startDate, format: .dateTime.month().day()) - \(trip.endDate, format: .dateTime.month().day())")
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding(.vertical, 4)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .padding(.vertical, 4)
+                    .onDelete(perform: deleteTrips)
+                }
+            } else {
+                List(selection: $selectedTrip) {
+                    ForEach(trips) { trip in
+                        NavigationLink(value: trip) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(trip.name)
+                                    .font(.headline)
+                                Text("\(trip.startDate, format: .dateTime.month().day()) - \(trip.endDate, format: .dateTime.month().day())")
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
+                    .onDelete(perform: deleteTrips)
                 }
             }
-            .onDelete(perform: deleteTrips)
         }
     }
     

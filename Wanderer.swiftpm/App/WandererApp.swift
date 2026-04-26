@@ -2,7 +2,7 @@ import SwiftUI
 import SwiftData
 
 @main
-struct WandererApp: App {
+struct TripBuddyApp: App {
     @State private var authManager = AuthManager()
 
     var sharedModelContainer: ModelContainer = {

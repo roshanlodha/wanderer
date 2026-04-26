@@ -39,14 +39,6 @@ enum OAuthConfig {
         static let scope = "https://www.googleapis.com/auth/gmail.readonly"
     }
     
-    enum Microsoft {
-        static var clientID: String { OAuthConfig.secrets["MicrosoftClientID"] ?? "" }
-        
-        static let redirectURI = "wanderer://oauth2/microsoft"
-        static let authEndpoint = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize"
-        static let tokenEndpoint = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
-        static let scope = "Mail.Read offline_access"
-    }
 }
 
 // MARK: - Token Response
@@ -71,21 +63,17 @@ class OAuthService: NSObject, ASWebAuthenticationPresentationContextProviding {
     
     enum Provider: CustomStringConvertible {
         case google
-        case microsoft
         
         var callbackScheme: String {
             switch self {
             case .google:
                 return OAuthConfig.Google.reversedClientID
-            case .microsoft:
-                return "wanderer"
             }
         }
         
         var description: String {
             switch self {
             case .google: return "Google"
-            case .microsoft: return "Microsoft"
             }
         }
     }
@@ -121,7 +109,6 @@ class OAuthService: NSObject, ASWebAuthenticationPresentationContextProviding {
         let keychain = KeychainManager.shared
         switch provider {
         case .google: return keychain.hasToken(forKey: .googleAccessToken)
-        case .microsoft: return keychain.hasToken(forKey: .microsoftAccessToken)
         }
     }
     
@@ -169,19 +156,6 @@ class OAuthService: NSObject, ASWebAuthenticationPresentationContextProviding {
                 URLQueryItem(name: "code_challenge_method", value: "S256"),
                 URLQueryItem(name: "access_type", value: "offline"),
                 URLQueryItem(name: "prompt", value: "consent")
-            ]
-            return components.url!
-            
-        case .microsoft:
-            var components = URLComponents(string: OAuthConfig.Microsoft.authEndpoint)!
-            components.queryItems = [
-                URLQueryItem(name: "client_id", value: OAuthConfig.Microsoft.clientID),
-                URLQueryItem(name: "redirect_uri", value: OAuthConfig.Microsoft.redirectURI),
-                URLQueryItem(name: "response_type", value: "code"),
-                URLQueryItem(name: "scope", value: OAuthConfig.Microsoft.scope),
-                URLQueryItem(name: "code_challenge", value: codeChallenge),
-                URLQueryItem(name: "code_challenge_method", value: "S256"),
-                URLQueryItem(name: "response_mode", value: "query")
             ]
             return components.url!
         }
@@ -236,14 +210,6 @@ class OAuthService: NSObject, ASWebAuthenticationPresentationContextProviding {
                     "grant_type": "authorization_code",
                     "redirect_uri": OAuthConfig.Google.redirectURI
                 ])
-            case .microsoft:
-                return (OAuthConfig.Microsoft.tokenEndpoint, [
-                    "client_id": OAuthConfig.Microsoft.clientID,
-                    "code": code,
-                    "code_verifier": codeVerifier,
-                    "grant_type": "authorization_code",
-                    "redirect_uri": OAuthConfig.Microsoft.redirectURI
-                ])
             }
         }()
         
@@ -282,15 +248,6 @@ class OAuthService: NSObject, ASWebAuthenticationPresentationContextProviding {
             let verified = keychain.hasToken(forKey: .googleAccessToken)
             print("[OAuthService] Google token save verified: \(verified)")
             return verified
-            
-        case .microsoft:
-            keychain.save(response.accessToken, forKey: .microsoftAccessToken)
-            if let refresh = response.refreshToken {
-                keychain.save(refresh, forKey: .microsoftRefreshToken)
-            }
-            let verified = keychain.hasToken(forKey: .microsoftAccessToken)
-            print("[OAuthService] Microsoft token save verified: \(verified)")
-            return verified
         }
     }
     
@@ -302,9 +259,6 @@ class OAuthService: NSObject, ASWebAuthenticationPresentationContextProviding {
         case .google:
             keychain.delete(forKey: .googleAccessToken)
             keychain.delete(forKey: .googleRefreshToken)
-        case .microsoft:
-            keychain.delete(forKey: .microsoftAccessToken)
-            keychain.delete(forKey: .microsoftRefreshToken)
         }
     }
     

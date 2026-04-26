@@ -4,7 +4,7 @@
 <dict>
     <key>BGTaskSchedulerPermittedIdentifiers</key>
     <array>
-        <string>com.roshanlodha.Wanderer.fetchEmails</string>
+        <string>com.roshanlodha.TripBuddy.fetchEmails</string>
     </array>
     <key>UIBackgroundModes</key>
     <array>

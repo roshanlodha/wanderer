@@ -7,12 +7,10 @@ struct SettingsView: View {
     
     @State private var oauthService = OAuthService()
     @State private var isConnectingGoogle = false
-    @State private var isConnectingMicrosoft = false
     @State private var errorMessage: String?
     
     // Reactive connected state
     @State private var googleConnected: Bool = false
-    @State private var microsoftConnected: Bool = false
     
     // AI Settings
     @AppStorage("extractionEngine") private var extractionEngine: String = "Cloud (OpenAI)"
@@ -20,6 +18,8 @@ struct SettingsView: View {
     @AppStorage("classificationMode") private var classificationMode: String = "Smart"
     @AppStorage("classificationEngine") private var classificationEngine: String = "Apple Intelligence"
     @AppStorage("classificationCloudModelSelection") private var classificationCloudModelSelection: String = "Nano"
+    @AppStorage("localMLXServerURL") private var localMLXServerURL: String = "http://127.0.0.1:5413"
+    @AppStorage("localMLXModel") private var localMLXModel: String = "mlx-community/Qwen3.5-4B-Instruct-4bit"
     @State private var openAIApiKey: String = ""
     
     var body: some View {
@@ -50,15 +50,6 @@ struct SettingsView: View {
                         isConnected: googleConnected,
                         isConnecting: isConnectingGoogle,
                         provider: .google
-                    )
-                    
-                    providerRow(
-                        icon: "envelope.fill",
-                        color: .blue,
-                        name: "Microsoft",
-                        isConnected: microsoftConnected,
-                        isConnecting: isConnectingMicrosoft,
-                        provider: .microsoft
                     )
                 } header: {
                     Text("Email Sync")
@@ -92,6 +83,14 @@ struct SettingsView: View {
                                 .onChange(of: openAIApiKey) { _, newValue in
                                     KeychainManager.shared.save(newValue, forKey: .openAIApiKey)
                                 }
+                        } else if classificationEngine == "Local (MLX)" {
+                            TextField("SwiftLM Server URL", text: $localMLXServerURL)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+
+                            TextField("SwiftLM Model", text: $localMLXModel)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
                         }
                     }
                 } header: {
@@ -101,6 +100,8 @@ struct SettingsView: View {
                         Text("Fast mode skips AI classification and puts all fetched emails into Detected Emails.")
                     } else if classificationEngine == "Apple Intelligence" {
                         Text("Smart mode uses on-device Apple Intelligence by default for lightweight local classification.")
+                    } else if classificationEngine == "Local (MLX)" {
+                        Text("Smart mode uses the native SwiftLM server (OpenAI-compatible). Default model is Qwen3.5-4B.")
                     } else {
                         Text("Smart mode uses AI to split emails into Detected vs Important and filter out non-trip emails.")
                     }
@@ -126,6 +127,14 @@ struct SettingsView: View {
                             .onChange(of: openAIApiKey) { _, newValue in
                                 KeychainManager.shared.save(newValue, forKey: .openAIApiKey)
                             }
+                    } else if extractionEngine == "Local (MLX)" {
+                        TextField("SwiftLM Server URL", text: $localMLXServerURL)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+
+                        TextField("SwiftLM Model", text: $localMLXModel)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
                     }
                 } header: {
                     Text("Extraction")
@@ -133,6 +142,8 @@ struct SettingsView: View {
                     if extractionEngine == "Apple Intelligence" {
                         Text("Warning: Apple Intelligence has a limited context window. Large emails will be truncated and may lead to parsing errors.")
                             .foregroundColor(.orange)
+                    } else if extractionEngine == "Local (MLX)" {
+                        Text("Uses native SwiftLM via local OpenAI-compatible endpoint. Recommended model: mlx-community/Qwen3.5-4B-Instruct-4bit.")
                     } else {
                         Text("Select where your emails are processed to extract itinerary details.")
                     }
@@ -184,20 +195,32 @@ struct SettingsView: View {
                 ProgressView()
                     .controlSize(.small)
             } else if isConnected {
-                HStack(spacing: 6) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(.green)
-                    Text("Connected")
+                VStack(alignment: .trailing, spacing: 8) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.green)
+                        Text("Connected")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+
+                    HStack(spacing: 8) {
+                        Button("Reconnect") {
+                            oauthService.disconnect(provider: provider)
+                            refreshConnectionState()
+                            connectProvider(provider)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+
+                        Button("Disconnect", role: .destructive) {
+                            oauthService.disconnect(provider: provider)
+                            refreshConnectionState()
+                        }
+                        .buttonStyle(.borderless)
                         .font(.subheadline)
-                        .foregroundColor(.secondary)
+                    }
                 }
-                
-                Button("Disconnect", role: .destructive) {
-                    oauthService.disconnect(provider: provider)
-                    refreshConnectionState()
-                }
-                .buttonStyle(.borderless)
-                .font(.subheadline)
             } else {
                 Button("Connect") {
                     connectProvider(provider)
@@ -212,25 +235,17 @@ struct SettingsView: View {
     
     private func refreshConnectionState() {
         googleConnected = oauthService.isConnected(provider: .google)
-        microsoftConnected = oauthService.isConnected(provider: .microsoft)
-        print("[SettingsView] State refreshed — Google: \(googleConnected), Microsoft: \(microsoftConnected)")
+        print("[SettingsView] State refreshed — Google: \(googleConnected)")
     }
     
     private func connectProvider(_ provider: OAuthService.Provider) {
         errorMessage = nil
-        
-        switch provider {
-        case .google: isConnectingGoogle = true
-        case .microsoft: isConnectingMicrosoft = true
-        }
+        isConnectingGoogle = true
         
         Task {
             defer {
                 Task { @MainActor in
-                    switch provider {
-                    case .google: isConnectingGoogle = false
-                    case .microsoft: isConnectingMicrosoft = false
-                    }
+                    isConnectingGoogle = false
                 }
             }
             

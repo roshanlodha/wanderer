@@ -21,7 +21,7 @@ struct LaunchView: View {
                     .foregroundStyle(.blue.gradient)
 
                 VStack(spacing: 8) {
-                    Text("Wanderer")
+                    Text("TripBuddy")
                         .font(.system(size: 40, weight: .bold, design: .rounded))
                         .foregroundColor(.white)
 

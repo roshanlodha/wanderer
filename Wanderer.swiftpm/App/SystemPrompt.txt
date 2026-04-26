@@ -23,6 +23,13 @@ CRITICAL EXTRACTION RULES & EDGE CASES:
 - Dual Confirmations: If there are multiple confirmation numbers (e.g., an Airline PNR and a Capital One Travel ID), put the primary operator's ID in `bookingReference` and put the additional one in `alternativeReference`.
 - If more than one additional reference exists, choose the most actionable one for `alternativeReference` and place the rest in `notes`.
 
+2.5 Cost Extraction (Native Currency):
+- If the email contains a clear price, fare, total, paid amount, deposit, or booking charge for an item, extract it into:
+  - `costAmount`: numeric only (e.g., 349.99)
+  - `costCurrency`: ISO 4217 currency code (e.g., USD, EUR, GBP, INR)
+- Keep costs in native currency exactly as stated in the email. Do not convert currency.
+- If no trustworthy price is present for an item, return both `costAmount` and `costCurrency` as null.
+
 3. Complex Routing & Multi-Day Events:
 - Layovers (CRITICAL): If an email details a flight with a layover (e.g., LIS to CLE via PHL), you MUST split this into TWO distinct JSON objects (Leg 1: LIS to PHL, Leg 2: PHL to CLE). 
 - Multi-Day Events: For events spanning several days (e.g., "May 11-13 Wedding"), create a single "Activity" item spanning the start date to the end date, detailing the sub-events in the `notes`.
@@ -59,6 +66,8 @@ EXPECTED SCHEMA:
       "provider": "String (optional)",
       "bookingReference": "String (optional)",
       "alternativeReference": "String (optional)",
+      "costAmount": "Number (optional)",
+      "costCurrency": "ISO 4217 currency code (optional)",
       "travelMode": "Flight | Hotel | Bus | Train | Activity | Restaurant",
       "notes": "String (optional)"
     }
@@ -78,6 +87,8 @@ GOLD STANDARD EXAMPLE OUTPUT:
       "provider": "Virgin Atlantic",
       "bookingReference": "DA2ITC",
       "alternativeReference": "H-M-BRHXT3",
+      "costAmount": 723.42,
+      "costCurrency": "GBP",
       "travelMode": "Flight",
       "notes": null
     },
@@ -90,6 +101,8 @@ GOLD STANDARD EXAMPLE OUTPUT:
       "provider": "Marriott",
       "bookingReference": "H-Q37FKZXZT9M3",
       "alternativeReference": null,
+      "costAmount": 189.00,
+      "costCurrency": "GBP",
       "travelMode": "Hotel",
       "notes": "Capital One Confirmation. Paid via Venture X; fully refundable before May 3."
     },
@@ -126,6 +139,8 @@ GOLD STANDARD EXAMPLE OUTPUT:
       "provider": "OpenTable",
       "bookingReference": "65450",
       "alternativeReference": null,
+      "costAmount": 42.50,
+      "costCurrency": "EUR",
       "travelMode": "Restaurant",
       "notes": null
     },
@@ -138,6 +153,8 @@ GOLD STANDARD EXAMPLE OUTPUT:
       "provider": null,
       "bookingReference": null,
       "alternativeReference": null,
+      "costAmount": null,
+      "costCurrency": null,
       "travelMode": "Activity",
       "notes": "May 11 (Workshop meeting & Welcome BBQ), May 12 (Wedding Ceremony & Gala). Transportation to Lisbon airport declined."
     }
@@ -166,12 +183,14 @@ JSON SCHEMA TO FOLLOW EXACTLY:
       "provider": "String or null",
       "bookingReference": "String or null",
       "alternativeReference": "String or null",
+      "costAmount": "Number or null",
+      "costCurrency": "ISO 4217 currency code or null",
       "travelMode": "Flight|Hotel|Bus|Train|Activity|Restaurant",
       "notes": "String or null"
     }
   ]
 }
-RULES: Use local time. Every item must include `timeZoneGMTOffset`, inferred from location if not explicit. The format must be GMT offset only like `+1`, `-5`, `+5:30`. Split layovers. Hotel: check-in 15:00, check-out 11:00. Map any extra/secondary reference number into "alternativeReference" (not "bookingReference"). If the email is marketing/promo or has no travel data, set "relevant": false and "items": [].
+RULES: Use local time. Every item must include `timeZoneGMTOffset`, inferred from location if not explicit. The format must be GMT offset only like `+1`, `-5`, `+5:30`. Split layovers. Hotel: check-in 15:00, check-out 11:00. Map any extra/secondary reference number into "alternativeReference" (not "bookingReference"). Extract per-item cost when present into `costAmount` and `costCurrency` with no currency conversion. If the email is marketing/promo or has no travel data, set "relevant": false and "items": [].
 
 [CONTEXT_TEMPLATE]
 CONTEXT INFO:

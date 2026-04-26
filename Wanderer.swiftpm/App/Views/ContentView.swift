@@ -3,7 +3,6 @@ import SwiftData
 
 struct ContentView: View {
     @State private var selectedTrip: Trip?
-    @State private var showSettings = false
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     
     var body: some View {
@@ -11,7 +10,7 @@ struct ContentView: View {
             if horizontalSizeClass == .compact {
                 NavigationStack {
                     TripListView(selectedTrip: $selectedTrip)
-                        .navigationDestination(for: Trip.self) { trip in
+                        .navigationDestination(item: $selectedTrip) { trip in
                             TripDetailView(trip: trip)
                         }
                 }
@@ -27,9 +26,6 @@ struct ContentView: View {
                 }
                 .navigationSplitViewStyle(.balanced)
             }
-        }
-        .sheet(isPresented: $showSettings) {
-            SettingsView()
         }
     }
 }

@@ -51,9 +51,26 @@ struct TripDetailView: View {
         let grouped = Dictionary(grouping: sorted) { Calendar.current.startOfDay(for: $0.startTime) }
         return grouped.sorted { $0.key < $1.key }
     }
+
+    var estimatedCostByCurrency: [(currency: String, total: Double)] {
+        let grouped = Dictionary(grouping: trip.items.compactMap { item -> (String, Double)? in
+            guard let amount = item.costAmount,
+                  let currency = item.costCurrencyCode?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !currency.isEmpty else {
+                return nil
+            }
+            return (currency.uppercased(), amount)
+        }, by: { $0.0 })
+
+        return grouped
+            .map { key, values in
+                (currency: key, total: values.reduce(0) { $0 + $1.1 })
+            }
+            .sorted { $0.currency < $1.currency }
+    }
     
     var hasConnectedEmail: Bool {
-        OAuthService().isConnected(provider: .google) || OAuthService().isConnected(provider: .microsoft)
+        OAuthService().isConnected(provider: .google)
     }
     
     var isBusy: Bool {
@@ -69,7 +86,7 @@ struct TripDetailView: View {
             .lowercased()
             .replacingOccurrences(of: "[^a-z0-9]+", with: "-", options: .regularExpression)
             .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
-        return cleaned.isEmpty ? "wanderer-trip" : cleaned
+        return cleaned.isEmpty ? "tripbuddy-trip" : cleaned
     }
 
     private enum EmailTab: String, CaseIterable {
@@ -203,7 +220,7 @@ struct TripDetailView: View {
         .fileExporter(
             isPresented: $showTripExporter,
             document: exportDocument,
-            contentType: .wandererTripJSON,
+            contentType: .tripBuddyTripJSON,
             defaultFilename: sanitizedTripFileName
         ) { result in
             if case .failure(let error) = result {
@@ -212,7 +229,7 @@ struct TripDetailView: View {
         }
         .fileImporter(
             isPresented: $showTripImporter,
-            allowedContentTypes: [.wandererTripJSON, .json]
+            allowedContentTypes: [.tripBuddyTripJSON, .json]
         ) { result in
             importTrip(from: result)
         }
@@ -256,6 +273,10 @@ struct TripDetailView: View {
             if !isBusy && trip.items.isEmpty && !hasAnyEmailSections {
                 emptyStateView
             } else {
+                if !estimatedCostByCurrency.isEmpty {
+                    costEstimatorSection
+                }
+
                 if !groupedItems.isEmpty {
                     itinerarySection
                 }
@@ -300,6 +321,36 @@ struct TripDetailView: View {
     }
     
     // MARK: - Itinerary Section
+
+    private var costEstimatorSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label("Estimated Trip Cost", systemImage: "chart.bar.doc.horizontal")
+                    .font(.headline)
+                Spacer()
+                Text("Native Currency")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            ForEach(estimatedCostByCurrency, id: \.currency) { entry in
+                HStack {
+                    Text(entry.currency)
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                    Spacer()
+                    Text(entry.total, format: .number.precision(.fractionLength(2)))
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                }
+            }
+        }
+        .padding(12)
+        .background(Color(.secondarySystemGroupedBackground))
+        .cornerRadius(12)
+        .padding(.horizontal)
+        .padding(.bottom, 10)
+    }
     
     private var itinerarySection: some View {
         ForEach(groupedItems, id: \.0) { date, items in
@@ -1248,6 +1299,8 @@ struct TripDetailView: View {
                 alternativeReference: itemPayload.alternativeReference,
                 provider: itemPayload.provider,
                 notes: itemPayload.notes,
+                costAmount: itemPayload.costAmount,
+                costCurrencyCode: itemPayload.costCurrencyCode,
                 rawTextSource: itemPayload.rawTextSource,
                 travelMode: mode
             )
@@ -1666,7 +1719,7 @@ struct TripDetailView: View {
                     persistEmailCollections()
 
                     if emails.isEmpty {
-                        syncError = "No travel-related emails found. Try connecting an email account in Settings or check that you have travel confirmation emails."
+                        syncError = "If you believe this is an error, please reconnect to your email in settings."
                     } else {
                         var statusParts: [String] = []
                         statusParts.append("Mode: Fast")
@@ -1745,7 +1798,7 @@ struct TripDetailView: View {
                 classificationTask = nil
                 
                 if emails.isEmpty {
-                    syncError = "No travel-related emails found. Try connecting an email account in Settings or check that you have travel confirmation emails."
+                    syncError = "If you believe this is an error, please reconnect to your email in settings."
                 } else {
                     var statusParts: [String] = []
                     statusParts.append("Itinerary: \(itinerary.count)")

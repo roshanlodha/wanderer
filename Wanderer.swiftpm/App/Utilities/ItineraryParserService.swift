@@ -21,6 +21,8 @@ struct ExtractedItineraryItem: Codable {
     let alternativeReference: String?
     let travelMode: String?
     let notes: String?
+    let costAmount: Double?
+    let costCurrency: String?
 
     enum CodingKeys: String, CodingKey {
         case title
@@ -33,6 +35,8 @@ struct ExtractedItineraryItem: Codable {
         case alternativeReference
         case travelMode
         case notes
+        case costAmount
+        case costCurrency
     }
 
     init(
@@ -45,7 +49,9 @@ struct ExtractedItineraryItem: Codable {
         bookingReference: String?,
         alternativeReference: String?,
         travelMode: String?,
-        notes: String?
+        notes: String?,
+        costAmount: Double?,
+        costCurrency: String?
     ) {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
@@ -60,6 +66,8 @@ struct ExtractedItineraryItem: Codable {
         self.alternativeReference = alternativeReference
         self.travelMode = travelMode
         self.notes = notes
+        self.costAmount = costAmount
+        self.costCurrency = costCurrency
     }
 
     init(from decoder: Decoder) throws {
@@ -74,6 +82,8 @@ struct ExtractedItineraryItem: Codable {
         alternativeReference = try container.decodeIfPresent(String.self, forKey: .alternativeReference)
         travelMode = try container.decodeIfPresent(String.self, forKey: .travelMode)
         notes = try container.decodeIfPresent(String.self, forKey: .notes)
+        costAmount = try container.decodeIfPresent(Double.self, forKey: .costAmount)
+        costCurrency = try container.decodeIfPresent(String.self, forKey: .costCurrency)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -88,6 +98,8 @@ struct ExtractedItineraryItem: Codable {
         try container.encodeIfPresent(alternativeReference, forKey: .alternativeReference)
         try container.encodeIfPresent(travelMode, forKey: .travelMode)
         try container.encodeIfPresent(notes, forKey: .notes)
+        try container.encodeIfPresent(costAmount, forKey: .costAmount)
+        try container.encodeIfPresent(costCurrency, forKey: .costCurrency)
     }
 }
 
@@ -126,7 +138,7 @@ class ItineraryParserService {
             case .invalidAPIKey: return "Invalid or missing API key"
             case .networkError(let msg): return "Network error: \(msg)"
             case .parsingError(let msg): return "Parsing error: \(msg)"
-            case .missingEngine: return "Extraction engine not available"
+            case .missingEngine: return "Extraction engine not available. For Local (MLX), start SwiftLM and verify Settings > Local MLX."
             }
         }
     }
@@ -837,6 +849,8 @@ class ItineraryParserService {
                 alternativeReference: item.alternativeReference,
                 provider: item.provider,
                 notes: item.notes,
+                costAmount: item.costAmount,
+                costCurrencyCode: item.costCurrency,
                 rawTextSource: emailText,
                 travelMode: tMode
             ))
@@ -870,6 +884,20 @@ class ItineraryParserService {
         case "Nano": fallthrough
         default: return "gpt-5-nano"
         }
+    }
+
+    private func selectedLocalMLXModel() -> String {
+        let configured = UserDefaults.standard.string(forKey: "localMLXModel")?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let configured, !configured.isEmpty {
+            return configured
+        }
+        return "mlx-community/Qwen3.5-4B-Instruct-4bit"
+    }
+
+    private func selectedLocalMLXBaseURL() -> URL {
+        let configured = UserDefaults.standard.string(forKey: "localMLXServerURL")?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fallback = "http://127.0.0.1:5413"
+        return URL(string: (configured?.isEmpty == false ? configured! : fallback)) ?? URL(string: fallback)!
     }
 
     private func classifyWithOpenAI(text: String, contextText: String) async throws -> EmailTriageResult {
@@ -1038,13 +1066,15 @@ class ItineraryParserService {
                                     "provider": ["type": ["string", "null"]],
                                     "bookingReference": ["type": ["string", "null"]],
                                     "alternativeReference": ["type": ["string", "null"], "description": "Any secondary/additional confirmation, locator, or reservation number in the email"],
+                                    "costAmount": ["type": ["number", "null"], "description": "Total native-currency amount for this itinerary item if present"],
+                                    "costCurrency": ["type": ["string", "null"], "description": "ISO 4217 currency code for costAmount, e.g. USD, EUR"],
                                     "travelMode": [
                                         "type": "string",
                                         "enum": ["Flight", "Hotel", "Bus", "Train", "Activity", "Restaurant", "Document", "Other"]
                                     ],
                                     "notes": ["type": ["string", "null"]]
                                 ],
-                                "required": ["title", "startTime", "endTime", "timeZoneGMTOffset", "locationName", "provider", "bookingReference", "alternativeReference", "travelMode", "notes"],
+                                "required": ["title", "startTime", "endTime", "timeZoneGMTOffset", "locationName", "provider", "bookingReference", "alternativeReference", "costAmount", "costCurrency", "travelMode", "notes"],
                                 "additionalProperties": false
                             ]
                         ]
@@ -1133,6 +1163,93 @@ class ItineraryParserService {
     }
     
     // MARK: - Apple Intelligence
+
+    private func parseWithSwiftLM(text: String, systemPrompt: String) async throws -> ExtractionResult {
+        let baseURL = selectedLocalMLXBaseURL()
+        let endpoint = baseURL.appending(path: "v1/chat/completions")
+
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 90
+        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let schema: [String: Any] = [
+            "type": "json_schema",
+            "json_schema": [
+                "name": "itinerary_extraction",
+                "strict": true,
+                "schema": [
+                    "type": "object",
+                    "properties": [
+                        "relevant": ["type": "boolean"],
+                        "items": [
+                            "type": "array",
+                            "items": [
+                                "type": "object",
+                                "properties": [
+                                    "title": ["type": "string"],
+                                    "startTime": ["type": "string"],
+                                    "endTime": ["type": ["string", "null"]],
+                                    "timeZoneGMTOffset": ["type": ["string", "null"]],
+                                    "locationName": ["type": "string"],
+                                    "provider": ["type": ["string", "null"]],
+                                    "bookingReference": ["type": ["string", "null"]],
+                                    "alternativeReference": ["type": ["string", "null"]],
+                                    "costAmount": ["type": ["number", "null"]],
+                                    "costCurrency": ["type": ["string", "null"]],
+                                    "travelMode": ["type": "string"],
+                                    "notes": ["type": ["string", "null"]]
+                                ],
+                                "required": ["title", "startTime", "endTime", "timeZoneGMTOffset", "locationName", "provider", "bookingReference", "alternativeReference", "costAmount", "costCurrency", "travelMode", "notes"],
+                                "additionalProperties": false
+                            ]
+                        ]
+                    ],
+                    "required": ["relevant", "items"],
+                    "additionalProperties": false
+                ]
+            ]
+        ]
+
+        let body: [String: Any] = [
+            "model": selectedLocalMLXModel(),
+            "messages": [
+                ["role": "system", "content": systemPrompt],
+                ["role": "user", "content": text]
+            ],
+            "response_format": schema
+        ]
+
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw ParserError.networkError("Invalid SwiftLM response")
+        }
+
+        guard (200...299).contains(httpResponse.statusCode) else {
+            let bodyString = String(data: data, encoding: .utf8) ?? ""
+            throw ParserError.networkError("SwiftLM status \(httpResponse.statusCode): \(bodyString)")
+        }
+
+        struct LocalResponse: Codable {
+            struct Choice: Codable {
+                struct Message: Codable {
+                    let content: String?
+                }
+                let message: Message
+            }
+            let choices: [Choice]
+        }
+
+        let decoded = try JSONDecoder().decode(LocalResponse.self, from: data)
+        guard let contentString = decoded.choices.first?.message.content,
+              let contentData = contentString.data(using: .utf8) else {
+            throw ParserError.parsingError("SwiftLM returned no parseable content")
+        }
+
+        return try JSONDecoder().decode(ExtractionResult.self, from: contentData)
+    }
 
     private func extractJSONObjectString(from text: String) -> String? {
         // Fast path: whole response is already valid JSON.
@@ -1421,7 +1538,9 @@ class ItineraryParserService {
             bookingReference: nil,
             alternativeReference: nil,
             travelMode: inferredMode.rawValue,
-            notes: "Extracted with local MLX fallback parser"
+            notes: "Extracted with local MLX fallback parser",
+            costAmount: nil,
+            costCurrency: nil
         )
 
         return ExtractionResult(relevant: true, items: [item])
@@ -1452,8 +1571,13 @@ class ItineraryParserService {
     
     #if canImport(MLX)
     private func parseWithLocalMLX(text: String, systemPrompt: String, tripStartDate: Date?) async throws -> ExtractionResult {
-        print("[ItineraryParserService] Running MLX local parser fallback...")
-        return heuristicLocalExtraction(from: text, tripStartDate: tripStartDate)
+        print("[ItineraryParserService] Running Local (MLX) via SwiftLM...")
+        do {
+            return try await parseWithSwiftLM(text: text, systemPrompt: systemPrompt)
+        } catch {
+            print("[ItineraryParserService] SwiftLM call failed, falling back to heuristic parser: \(error.localizedDescription)")
+            return heuristicLocalExtraction(from: text, tripStartDate: tripStartDate)
+        }
     }
     #else
     private func parseWithLocalMLX(text: String, systemPrompt: String, tripStartDate: Date?) async throws -> ExtractionResult {
