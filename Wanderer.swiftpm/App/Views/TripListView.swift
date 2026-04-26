@@ -14,7 +14,11 @@ struct TripListView: View {
         Group {
             if horizontalSizeClass == .compact {
                 tripList
+                    #if os(iOS)
                     .listStyle(.insetGrouped)
+                    #else
+                    .listStyle(.inset)
+                    #endif
             } else {
                 tripList
                     .listStyle(.sidebar)

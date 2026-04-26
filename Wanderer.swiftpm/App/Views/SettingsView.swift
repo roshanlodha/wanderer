@@ -31,15 +31,119 @@ struct SettingsView: View {
     @State private var localModelDownloadError: String?
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
-    private var isCompactUI: Bool {
+    var isCompactUI: Bool {
         horizontalSizeClass == .compact
+    }
+
+    @ViewBuilder
+    private var classificationFooter: some View {
+        if classificationMode == "Fast" {
+            Text("Fast mode skips AI classification and puts all fetched emails into Detected Emails.")
+        } else if classificationEngine == "Apple Intelligence" {
+            Text("Smart mode uses on-device Apple Intelligence by default for lightweight local classification.")
+        } else if classificationEngine == "Local (MLX)" {
+            Text("Smart mode supports on-device model downloads and optional SwiftLM server fallback. Recommended: Qwen2.5.")
+        } else {
+            Text("Smart mode uses AI to split emails into Detected vs Important and filter out non-trip emails.")
+        }
+    }
+    
+    @ViewBuilder
+    private var extractionFooter: some View {
+        if extractionEngine == "Apple Intelligence" {
+            Text("Warning: Apple Intelligence has a limited context window. Large emails will be truncated and may lead to parsing errors.")
+                .foregroundColor(.orange)
+        } else if extractionEngine == "Local (MLX)" {
+            Text("Local MLX supports on-device model download with user confirmation. SwiftLM endpoint is optional fallback if you run a local server.")
+        } else {
+            Text("Select where your emails are processed to extract itinerary details.")
+        }
+    }
+    
+    @ViewBuilder
+    private var smartClassificationPicker: some View {
+        Picker("Classification Engine", selection: $classificationEngine) {
+            Text("Apple Intelligence").tag("Apple Intelligence")
+            Text("Cloud (OpenAI)").tag("Cloud (OpenAI)")
+            Text("Local (MLX)").tag("Local (MLX)")
+        }
+        .pickerStyle(.segmented)
+
+        if classificationEngine == "Cloud (OpenAI)" {
+            Picker("Classification Model", selection: $classificationCloudModelSelection) {
+                Text("Mini").tag("Mini")
+                Text("Nano").tag("Nano")
+                Text("SOTA").tag("SOTA")
+            }
+
+            SecureField("OpenAI API Key", text: $openAIApiKey)
+                .onChange(of: openAIApiKey) { _, newValue in
+                    KeychainManager.shared.save(newValue, forKey: .openAIApiKey)
+                }
+        } else if classificationEngine == "Local (MLX)" {
+            localMLXControls
+        }
+    }
+
+    @ViewBuilder
+    private var extractionPicker: some View {
+        Picker("Extraction Engine", selection: $extractionEngine) {
+            Text("Cloud (OpenAI)").tag("Cloud (OpenAI)")
+            Text("Apple Intelligence").tag("Apple Intelligence")
+            Text("Local (MLX)").tag("Local (MLX)")
+        }
+        .pickerStyle(.segmented)
+        
+        if extractionEngine == "Cloud (OpenAI)" {
+            Picker("Extraction Model", selection: $extractionCloudModelSelection) {
+                Text("Mini").tag("Mini")
+                Text("Nano").tag("Nano")
+                Text("SOTA").tag("SOTA")
+            }
+
+            SecureField("OpenAI API Key", text: $openAIApiKey)
+                .onChange(of: openAIApiKey) { _, newValue in
+                    KeychainManager.shared.save(newValue, forKey: .openAIApiKey)
+                }
+        } else if extractionEngine == "Local (MLX)" {
+            localMLXControls
+        }
+    }
+
+    @ViewBuilder
+    private var localMLXControls: some View {
+        HStack {
+            TextField("SwiftLM Model", text: $localMLXModel)
+                #if os(iOS)
+                .textInputAutocapitalization(.never)
+                #endif
+                .autocorrectionDisabled()
+            
+            Button {
+                localMLXModel = LocalMLXModelManager.shared.recommendedModelIDForCurrentDevice()
+            } label: {
+                Image(systemName: "sparkles")
+            }
+            .buttonStyle(.bordered)
+            .help("Reset to recommended model for this device")
+        }
+
+        Toggle("Prefer On-Device Model", isOn: $localMLXOnDeviceEnabled)
+
+        onDeviceLocalModelControls
+
+        TextField("SwiftLM Server URL (Optional)", text: $localMLXServerURL)
+            #if os(iOS)
+            .textInputAutocapitalization(.never)
+            #endif
+            .autocorrectionDisabled()
     }
     
     var body: some View {
         NavigationStack {
             Form {
                 // MARK: - Account
-                Section(header: Text("Account")) {
+                Section {
                     if authManager.isGuest {
                         Label("Signed in as Guest", systemImage: "person.crop.circle.badge.questionmark")
                             .foregroundColor(.secondary)
@@ -52,6 +156,8 @@ struct SettingsView: View {
                         authManager.signOut()
                         dismiss()
                     }
+                } header: {
+                    Text("Account")
                 }
                 
                 // MARK: - Email Sync
@@ -78,116 +184,21 @@ struct SettingsView: View {
                     .pickerStyle(.segmented)
 
                     if classificationMode == "Smart" {
-                        Picker("Classification Engine", selection: $classificationEngine) {
-                            Text("Apple Intelligence").tag("Apple Intelligence")
-                            Text("Cloud (OpenAI)").tag("Cloud (OpenAI)")
-                            Text("Local (MLX)").tag("Local (MLX)")
-                        }
-                        .pickerStyle(.segmented)
-
-                        if classificationEngine == "Cloud (OpenAI)" {
-                            Picker("Classification Model", selection: $classificationCloudModelSelection) {
-                                Text("Mini").tag("Mini")
-                                Text("Nano").tag("Nano")
-                                Text("SOTA").tag("SOTA")
-                            }
-
-                            SecureField("OpenAI API Key", text: $openAIApiKey)
-                                .onChange(of: openAIApiKey) { _, newValue in
-                                    KeychainManager.shared.save(newValue, forKey: .openAIApiKey)
-                                }
-                        if classificationEngine == "Local (MLX)" {
-                            HStack {
-                                TextField("SwiftLM Model", text: $localMLXModel)
-                                    .textInputAutocapitalization(.never)
-                                    .autocorrectionDisabled()
-                                
-                                Button {
-                                    localMLXModel = LocalMLXModelManager.shared.recommendedModelIDForCurrentDevice()
-                                } label: {
-                                    Image(systemName: "sparkles")
-                                }
-                                .buttonStyle(.bordered)
-                                .help("Reset to recommended model for this device")
-                            }
-
-                            Toggle("Prefer On-Device Model", isOn: $localMLXOnDeviceEnabled)
-
-                            onDeviceLocalModelControls
-
-                            TextField("SwiftLM Server URL (Optional)", text: $localMLXServerURL)
-                                .textInputAutocapitalization(.never)
-                                .autocorrectionDisabled()
-                        }
+                        smartClassificationPicker
                     }
                 } header: {
                     Text("Email Classification")
                 } footer: {
-                    if classificationMode == "Fast" {
-                        Text("Fast mode skips AI classification and puts all fetched emails into Detected Emails.")
-                    } else if classificationEngine == "Apple Intelligence" {
-                        Text("Smart mode uses on-device Apple Intelligence by default for lightweight local classification.")
-                    } else if classificationEngine == "Local (MLX)" {
-                        Text("Smart mode supports on-device model downloads and optional SwiftLM server fallback. Recommended: Qwen2.5.")
-                    } else {
-                        Text("Smart mode uses AI to split emails into Detected vs Important and filter out non-trip emails.")
-                    }
+                    classificationFooter
                 }
 
                 // MARK: - AI Settings
                 Section {
-                    Picker("Extraction Engine", selection: $extractionEngine) {
-                        Text("Cloud (OpenAI)").tag("Cloud (OpenAI)")
-                        Text("Apple Intelligence").tag("Apple Intelligence")
-                        Text("Local (MLX)").tag("Local (MLX)")
-                    }
-                    .pickerStyle(.segmented)
-                    
-                    if extractionEngine == "Cloud (OpenAI)" {
-                        Picker("Extraction Model", selection: $extractionCloudModelSelection) {
-                            Text("Mini").tag("Mini")
-                            Text("Nano").tag("Nano")
-                            Text("SOTA").tag("SOTA")
-                        }
-
-                        SecureField("OpenAI API Key", text: $openAIApiKey)
-                            .onChange(of: openAIApiKey) { _, newValue in
-                                KeychainManager.shared.save(newValue, forKey: .openAIApiKey)
-                            }
-                    if extractionEngine == "Local (MLX)" {
-                        HStack {
-                            TextField("SwiftLM Model", text: $localMLXModel)
-                                .textInputAutocapitalization(.never)
-                                .autocorrectionDisabled()
-
-                            Button {
-                                localMLXModel = LocalMLXModelManager.shared.recommendedModelIDForCurrentDevice()
-                            } label: {
-                                Image(systemName: "sparkles")
-                            }
-                            .buttonStyle(.bordered)
-                            .help("Reset to recommended model for this device")
-                        }
-
-                        Toggle("Prefer On-Device Model", isOn: $localMLXOnDeviceEnabled)
-
-                        onDeviceLocalModelControls
-
-                        TextField("SwiftLM Server URL (Optional)", text: $localMLXServerURL)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                    }
+                    extractionPicker
                 } header: {
                     Text("Extraction")
                 } footer: {
-                    if extractionEngine == "Apple Intelligence" {
-                        Text("Warning: Apple Intelligence has a limited context window. Large emails will be truncated and may lead to parsing errors.")
-                            .foregroundColor(.orange)
-                    } else if extractionEngine == "Local (MLX)" {
-                        Text("Local MLX supports on-device model download with user confirmation. SwiftLM endpoint is optional fallback if you run a local server.")
-                    } else {
-                        Text("Select where your emails are processed to extract itinerary details.")
-                    }
+                    extractionFooter
                 }
                 
                 // MARK: - Error
@@ -263,7 +274,7 @@ struct SettingsView: View {
     }
 
     @ViewBuilder
-    private var onDeviceLocalModelControls: some View {
+    var onDeviceLocalModelControls: some View {
         if localModelDownloaded {
             Label("On-device model ready", systemImage: "checkmark.circle.fill")
                 .foregroundColor(.green)
@@ -306,7 +317,7 @@ struct SettingsView: View {
     // MARK: - Provider Row
     
     @ViewBuilder
-    private func providerRow(icon: String, color: Color, name: String, isConnected: Bool, isConnecting: Bool, provider: OAuthService.Provider) -> some View {
+    func providerRow(icon: String, color: Color, name: String, isConnected: Bool, isConnecting: Bool, provider: OAuthService.Provider) -> some View {
         HStack {
             Image(systemName: icon)
                 .foregroundColor(color)
@@ -368,12 +379,12 @@ struct SettingsView: View {
     
     // MARK: - Actions
     
-    private func refreshConnectionState() {
+    func refreshConnectionState() {
         googleConnected = oauthService.isConnected(provider: .google)
         print("[SettingsView] State refreshed — Google: \(googleConnected)")
     }
 
-    private func refreshLocalModelState() {
+    func refreshLocalModelState() {
         localModelDownloaded = LocalMLXModelManager.shared.isModelDownloaded(modelID: localMLXModel)
 
         Task {
@@ -384,7 +395,7 @@ struct SettingsView: View {
         }
     }
 
-    private func startLocalModelDownload() {
+    func startLocalModelDownload() {
         guard !isDownloadingLocalModel else { return }
 
         isDownloadingLocalModel = true
@@ -413,7 +424,7 @@ struct SettingsView: View {
         }
     }
     
-    private func connectProvider(_ provider: OAuthService.Provider) {
+    func connectProvider(_ provider: OAuthService.Provider) {
         errorMessage = nil
         isConnectingGoogle = true
         

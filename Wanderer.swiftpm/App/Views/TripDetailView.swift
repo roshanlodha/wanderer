@@ -144,6 +144,22 @@ struct TripDetailView: View {
         case other
     }
     
+    private var secondaryGroupedBackgroundColor: Color {
+        #if os(iOS)
+        return Color(.secondarySystemGroupedBackground)
+        #else
+        return Color(NSColor.windowBackgroundColor)
+        #endif
+    }
+
+    private var secondaryBackgroundColor: Color {
+        #if os(iOS)
+        return Color(.secondarySystemBackground)
+        #else
+        return Color(NSColor.controlBackgroundColor)
+        #endif
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             detailTabPicker
@@ -153,7 +169,9 @@ struct TripDetailView: View {
         }
         .padding()
         .navigationTitle(trip.name)
+        #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        #endif
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 // Settings button
@@ -305,24 +323,28 @@ struct TripDetailView: View {
                         selectedDetailTab = tab
                     }
                 } label: {
-                    Group {
-                        if isCompactUI {
-                            Image(systemName: tab.systemImage)
-                        } else {
-                            Label(tab.title, systemImage: tab.systemImage)
-                        }
-                    }
-                        .font(.subheadline)
+                    tabItemView(for: tab)
+                }
+                .font(.subheadline)
                         .fontWeight(.semibold)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 10)
                         .padding(.horizontal, 12)
-                        .background(selectedDetailTab == tab ? Color.orange : Color(.secondarySystemGroupedBackground))
+                        .background(selectedDetailTab == tab ? Color.orange : secondaryGroupedBackgroundColor)
                         .foregroundColor(selectedDetailTab == tab ? .white : .primary)
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                }
                 .buttonStyle(.plain)
             }
+        }
+        .padding(.horizontal)
+    }
+
+    @ViewBuilder
+    private func tabItemView(for tab: DetailTab) -> some View {
+        if isCompactUI {
+            Image(systemName: tab.systemImage)
+        } else {
+            Label(tab.title, systemImage: tab.systemImage)
         }
     }
 
@@ -361,7 +383,7 @@ struct TripDetailView: View {
             }
         }
         .padding(12)
-        .background(Color(.secondarySystemGroupedBackground))
+        .background(secondaryGroupedBackgroundColor)
         .cornerRadius(12)
         .padding(.horizontal)
         .padding(.bottom, 10)
@@ -482,7 +504,7 @@ struct TripDetailView: View {
             }
         }
         .padding()
-        .background(Color(.secondarySystemGroupedBackground))
+        .background(secondaryGroupedBackgroundColor)
         .cornerRadius(12)
         .shadow(color: .black.opacity(0.05), radius: 5, x: 0, y: 2)
         .padding(.horizontal)
@@ -688,14 +710,15 @@ struct TripDetailView: View {
                     .fontWeight(.semibold)
                     .padding(.horizontal, 7)
                     .padding(.vertical, 3)
-                    .background(selectedEmailTab == tab ? Color.white.opacity(0.22) : Color(.secondarySystemBackground))
+                    .background(selectedEmailTab == tab ? Color.white.opacity(0.22) : secondaryBackgroundColor)
                     .clipShape(Capsule())
+
             }
             .foregroundColor(selectedEmailTab == tab ? .white : .primary)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 10)
             .padding(.horizontal, 12)
-            .background(selectedEmailTab == tab ? tab.tint : Color(.secondarySystemGroupedBackground))
+            .background(selectedEmailTab == tab ? tab.tint : secondaryGroupedBackgroundColor)
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
         .buttonStyle(.plain)
@@ -909,7 +932,7 @@ struct TripDetailView: View {
             }
         }
         .padding(12)
-        .background(Color(.secondarySystemGroupedBackground))
+        .background(secondaryGroupedBackgroundColor)
         .cornerRadius(10)
         .padding(.horizontal)
     }
@@ -969,7 +992,12 @@ struct TripDetailView: View {
         case .irrelevant: return Color.orange.opacity(0.05)
         case .failed: return Color.red.opacity(0.05)
         case .extracted: return Color.green.opacity(0.05)
-        default: return Color(.secondarySystemGroupedBackground)
+        default: 
+            #if os(iOS)
+            return Color(.secondarySystemGroupedBackground)
+            #else
+            return Color(NSColor.windowBackgroundColor)
+            #endif
         }
     }
     
@@ -1008,7 +1036,9 @@ struct TripDetailView: View {
 
                         TextField("e.g. +1, -5, +5:30", text: $manualTimeZoneGMTOffset)
                             .textFieldStyle(.roundedBorder)
+                            #if os(iOS)
                             .textInputAutocapitalization(.never)
+                            #endif
                             .autocorrectionDisabled()
 
                         Button {
@@ -1060,7 +1090,9 @@ struct TripDetailView: View {
                 }
             }
             .navigationTitle(editingItem == nil ? "Add Event" : "Edit Event")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button {
@@ -1131,7 +1163,7 @@ struct TripDetailView: View {
                             .foregroundColor(.secondary)
                             .padding(8)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Color(.secondarySystemGroupedBackground))
+                            .background(secondaryGroupedBackgroundColor)
                             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                             .textSelection(.enabled)
                     } else {
@@ -1141,7 +1173,7 @@ struct TripDetailView: View {
                             .lineLimit(8)
                             .padding(8)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Color(.secondarySystemGroupedBackground))
+                            .background(secondaryGroupedBackgroundColor)
                             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                             .textSelection(.enabled)
                     }
@@ -1171,7 +1203,7 @@ struct TripDetailView: View {
                         .foregroundColor(.secondary)
                         .padding(8)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color(.secondarySystemGroupedBackground))
+                        .background(secondaryGroupedBackgroundColor)
                         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                         .textSelection(.enabled)
                 }
@@ -1211,7 +1243,9 @@ struct TripDetailView: View {
                 }
             }
             .navigationTitle("Trip Settings")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button {

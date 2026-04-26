@@ -232,6 +232,30 @@ struct WeeklyCalendarView: View {
         }
     }
 
+    private var secondaryGroupedBackgroundColor: Color {
+        #if os(iOS)
+        return Color(.secondarySystemGroupedBackground)
+        #else
+        return Color(NSColor.windowBackgroundColor)
+        #endif
+    }
+
+    private var systemBackgroundColor: Color {
+        #if os(iOS)
+        return Color(.systemBackground)
+        #else
+        return Color(NSColor.controlBackgroundColor)
+        #endif
+    }
+
+    private var secondaryBackgroundColor: Color {
+        #if os(iOS)
+        return Color(.secondarySystemBackground)
+        #else
+        return Color(NSColor.controlBackgroundColor)
+        #endif
+    }
+    
     var body: some View {
         GeometryReader { proxy in
             let isCompactLayout = horizontalSizeClass == .compact || proxy.size.width < compactLayoutBreakpoint
@@ -465,7 +489,7 @@ struct WeeklyCalendarView: View {
                     }
                 }
                 .padding(16)
-                .background(Color(.secondarySystemGroupedBackground))
+                .background(secondaryGroupedBackgroundColor)
                 .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
             }
         }
@@ -522,7 +546,7 @@ struct WeeklyCalendarView: View {
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(.systemBackground))
+            .background(systemBackgroundColor)
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -570,7 +594,7 @@ struct WeeklyCalendarView: View {
     private var backgroundGrid: some View {
         ZStack(alignment: .topLeading) {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color(.secondarySystemBackground))
+                .fill(secondaryBackgroundColor)
 
             if allDayRowHeight > 0 {
                 ForEach(Array(weekDays.enumerated()), id: \.offset) { index, _ in
